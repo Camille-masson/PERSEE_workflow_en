@@ -1,0 +1,276 @@
+---
+title: "`r title` - `r alpage`"
+author: Rémy Perron
+geometry: "left=2cm,right=2cm,top=1cm,bottom=2cm"
+output:
+  pdf_document:
+    extra_dependencies: ["booktabs", "array"]
+header-includes:
+  - \usepackage{pdfpages}
+---
+
+```{r, include=FALSE}
+library(kableExtra)
+library(cowplot)
+library(ggplot2)
+
+plot_results_page <- function(page_num, IDs, run_index) { 
+    plots_list = lapply(IDs, function(ID) ggdraw() + draw_image(magick::image_read_pdf(paste0(output_dir,alpage,"/individual_trajectories/",ID,".pdf"),
+                        pages = page_num, density = 300)) + theme(plot.margin = unit(c(0, 0, 0, 0), "cm")))
+    plot_grid(plotlist = plots_list, labels = IDs, label_size = 10,  ncol = 2)
+}
+```
+
+# Paramètres d’entrée
+
+* **model :** `r parameters_df$model`
+* **resampling_ratio :** `r parameters_df$resampling_ratio`
+* **resampling_first_index :** `r parameters_df$resampling_first_index`
+* **rollavg_convolution :** `r parameters_df$rollavg_convolution`
+* **knownRestingStates :** `r parameters_df$knownRestingStates`
+* **step_distribution :** `r parameters_df$step_distribution`
+* **angle_distribution :** `r parameters_df$angle_distribution`
+* **covariants :** `r parameters_df$covariants`
+* **step1_mean :** `r parameters_df$step1_mean`
+* **step1_std :** `r parameters_df$step1_std`
+* **step2_mean :** `r parameters_df$step2_mean`
+* **step2_std :** `r parameters_df$step2_std`
+* **step3_mean :** `r parameters_df$step3_mean`
+* **step3_std :** `r parameters_df$step3_std`
+* **angle1_mean :** `r atan(parameters_df$angle1_mean)*2`
+* **angle1_std :** `r exp(parameters_df$angle1_std)`
+* **angle2_mean :** `r atan(parameters_df$angle2_mean)*2`
+* **angle2_std :** `r exp(parameters_df$angle2_std)`
+* **angle3_mean :** `r atan(parameters_df$angle3_mean)*2`
+* **angle3_std :** `r exp(parameters_df$angle3_std)`
+* **angle1_fixed_mean :** `r atan(parameters_df$angle1_fixed_mean)*2`
+* **angle1_fixed_std :** `r exp(parameters_df$angle1_fixed_std)`
+* **angle2_fixed_mean :** `r atan(parameters_df$angle2_fixed_mean)*2`
+* **angle2_fixed_std :** `r exp(parameters_df$angle2_fixed_std)`
+* **angle3_fixed_mean :** `r atan(parameters_df$angle3_fixed_mean)*2`
+* **angle3_fixed_std :** `r exp(parameters_df$angle3_fixed_std)`
+
+# Indicateurs de performance 
+
+```{r, echo=FALSE, warning = FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=12)
+
+if(show_performance_indicators) {
+    stateNames = c("Repos", "Pâturage", "Déplacement")
+
+    # Compute the percentage of time spent, of high attribution probabilities and nul ODBA for each states
+    indicators = data.frame(matrix(nrow = 4, ncol = 3))
+    colnames(indicators) = stateNames
+    rownames(indicators) = c("Temps passé", "proba > 0.8", "proba > 0.95", "ODBA nul")
+    for (s in 1:3) {
+        total = sum(data_hmm$state == s, na.rm = T)
+        indicators[1,s] = total / sum(!is.na(data_hmm$state))
+        indicators[2,s] = sum(data_hmm$state == s & data_hmm$state_proba >= 0.8, na.rm = T) / total
+        indicators[3,s] = sum(data_hmm$state == s & data_hmm$state_proba >= 0.95, na.rm = T) / total
+        indicators[4,s] = 0
+    }
+
+    # Reducing ODBA per individual
+    for (ID in unique(data_hmm$ID)) {
+    data_hmm$ODBA_r[data_hmm$ID == ID] = data_hmm$ODBA[data_hmm$ID == ID] / sd(data_hmm$ODBA[data_hmm$ID == ID])
+    }
+
+    # Computing data by common timestamps
+    data_by_time = data.frame(matrix(nrow = 0, ncol = 5))
+    for (t in unique(data_hmm$time)) {
+        data_time = data_hmm[data_hmm$time == t,]
+
+        states = data_time$state[!is.na(data_time$state)]
+        if(length(states)>2 && length(unique(states)) == 1) { # if all idendified states are equal, with at least 3 states identified
+            # print(data_time)
+            data_by_time = rbind(data_by_time, c(states[1],
+                                mean(data_time$dist_to_flock, na.rm = T),
+                                median(data_time$ODBA_r, na.rm = T),  # median for ODBA because mean would be to much influenced by animals that would not be in the same state as those whose state has been identified
+                                sum(data_time$ODBA == 0, na.rm = T),
+                                sum(!is.na(data_time$ODBA)) ))
+        }
+    }
+    colnames(data_by_time) = c("state", "mean_dist_to_flock", "median_ODBA_r", "n_nul_ODBA", "n_ODBA")
+    for (s in 1:3) {
+        indicators[4,s] = sum(data_by_time$n_nul_ODBA[data_by_time$state == s])/sum(data_by_time$n_ODBA[data_by_time$state == s], na.rm = T)
+    }
+
+    data_by_time$state = stateNames[data_by_time$state]  %>%
+                            as.factor %>%
+                            fct_relevel("Repos", "Pâturage", "Déplacement") # to get them in the right order
+
+    bootstrap_chi2 <- function(categories, data, thresholds, categories_theoretical_freq) {
+        categories = categories[!is.na(data)]
+        data = data[!is.na(data)]
+        cat_names = unique(categories)
+
+        # Un-biasing total distribution with respect to states
+        unbiased_data = c()
+        for (cat in cat_names) {
+            unbiased_data = append(unbiased_data, sample(data[categories == cat], round(10000*categories_theoretical_freq[1, cat]), replace = TRUE, prob = NULL))
+        }
+
+        # Computing quantiles and under which quantile each observation falls
+        quantiles = quantile(unbiased_data, na.rm = TRUE, probs = thresholds)
+        intervals = findInterval(data, quantiles)
+        probabilities = diff(append(append(0, thresholds), 1))
+
+        # Performing 1000 chi2 test for each category
+        chi2 = data.frame(matrix(nrow = 1000, ncol = length(cat_names)))
+        for (i in 1:1000) {
+            cat_num = 1
+            for (cat in cat_names) {
+                sample_intervals = sample(intervals[categories == cat], 100, replace = TRUE, prob = NULL)
+
+                x = as.data.frame(table(sample_intervals))
+                x$sample_intervals = as.numeric(x$sample_intervals)
+                for (j in 1:(length(thresholds)+1)) {
+                    if (!(j %in% x$sample_intervals)) {
+                        x = rbind(x, c(j, 0))
+                    }
+                }
+                chi2[i, cat_num] = chisq.test(x[2], p = probabilities)$p.value
+                cat_num = cat_num + 1
+            }
+        }
+
+        # Computing proportion of positive tests
+        colnames(chi2) = cat_names
+        chi2 = chi2 > 0.05
+        chi2 = apply(chi2, 2, sum)/1000
+        return(chi2)
+    }
+
+    # Testing if the distribution of distance to flock and ODBA is equally distributed between each state
+    chi2 = bootstrap_chi2(data_by_time$state, data_by_time$mean_dist_to_flock, c(0.4, 0.8), indicators[1,])
+    chi2 = chi2[stateNames]
+    chi2 = apply(t(data.frame(chi2)), 2, function(x) paste(round(x*100, 1), "%"))
+
+    chi22 = bootstrap_chi2(data_by_time$state, data_by_time$median_ODBA_r, c(0.8, 0.9), indicators[1,])
+    chi22 = chi22[stateNames]
+    chi22 = apply(t(data.frame(chi22)), 2, function(x) paste(round(x*100, 1), "%"))
+
+    chi2 = rbind(t(data.frame(chi2)), t(data.frame(chi22)))
+    rownames(chi2) = c("Distance moyenne au troupeau", "ODBA median")
+
+    # Printing the indicator table
+    indicators = sapply(indicators, function(col) paste(round(col* 100,1), "%"))
+    rownames(indicators) = c("Temps passé", "proba > 0.8", "proba > 0.95", "ODBA nul")
+    knitr::kable(indicators, booktabs = TRUE, align = 'c')
+
+    # Plotting the distributions of distance to flock and ODBA for each state
+    p1 = ggplot(data_by_time[data_by_time$mean_dist_to_flock<500, ], aes(x = state, y = mean_dist_to_flock)) +
+        geom_boxplot() +
+        ylab("distance moyenne entre brebis") +
+        xlab("Comportement")
+    p2 = ggplot(data_by_time, aes(x = state, y = median_ODBA_r)) +
+        geom_boxplot() +
+        ylab("ODBA médian") +
+        xlab("Comportement")
+    p3 = ggplot(data_by_time[data_by_time$mean_dist_to_flock<2000, ], aes(x=mean_dist_to_flock)) +
+        geom_histogram(color="darkblue", fill="lightblue", bins = 20) +
+        geom_vline(aes(xintercept=median(mean_dist_to_flock, na.rm = T)),
+                color="blue", linetype="dashed", size=0.5) +
+        xlab("distance moyenne entre brebis") +
+        facet_wrap(~state, ncol = 2, scales = "free_y") +
+        theme(axis.text.x = element_text(angle = 90))
+    p4 = ggplot(data_by_time, aes(x=median_ODBA_r)) +
+        geom_histogram(color="darkblue", fill="lightblue", bins = 20) +
+        geom_vline(aes(xintercept=median(median_ODBA_r, na.rm = T)),
+                color="blue", linetype="dashed", size=0.5) +
+        xlab("ODBA médian") +
+        facet_wrap(~state, ncol = 2, scales = "free_y")
+    plot_grid(plotlist = list(p1, p2, p3, p4), ncol = 2)
+}
+```
+
+Pourcentage de test du chi2 dont la p-valeur est en deçà de 0,05 (1000 bootstraps de 100 observations avec remises) :
+```{r, echo = FALSE, warning = FALSE}
+if(show_performance_indicators) {
+    knitr::kable(chi2, booktabs = TRUE, align = 'c')
+}
+```
+Une p-valeur en deçà de 0,05 indique qu’il faut rejeter l’hypothèse nulle que la distribution des observations dans l’état considéré est la même de celle de l’ensemble des observations.
+
+
+# Résultat de l’optimisation
+Le temps d’execution du modèle est `r exec_time`.
+
+\newpage
+## Paramètres de pas
+Les paramètres maximisant la vraisemblance sont les suivants :
+```{r, echo=FALSE }
+IDs = results_df$ID
+
+init = data.frame("init", parameters_df$step1_mean, parameters_df$step1_std, parameters_df$step2_mean, parameters_df$step2_std,
+                  parameters_df$step3_mean, parameters_df$step3_std, atan(parameters_df$angle1_mean)*2, exp(parameters_df$angle1_std), atan(parameters_df$angle2_mean)*2,
+                  exp(parameters_df$angle2_std), atan(parameters_df$angle3_mean)*2, exp(parameters_df$angle3_std))
+colnames(init) = colnames(results_df)
+results_df = rbind(init, results_df)
+
+cols = c("ID", "step1_mean", "step1_std", "step2_mean", "step2_std", "step3_mean", "step3_std")
+knitr::kable(results_df[cols], booktabs = TRUE, digits = 3, align = 'c', escape = FALSE,
+              col.names = c("ID", "mean", "\\em{std}", "mean", "\\em{std}", "mean", "\\em{std}")) %>%
+    column_spec(c(3, 5, 7), italic = TRUE) %>%
+    row_spec(1, bold = TRUE) %>%
+    add_header_above(c(" " = 1, "Repos" = 2, "Pâturage" = 2, "Déplacement" = 2))
+
+knitr::opts_chunk$set(fig.width=12, fig.height=12)
+```
+
+## Distribution des pas
+```{r, echo=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=12)
+plot_results_page(5, IDs, run_index)
+```
+
+## Paramètres d’angle
+Les paramètres maximisant la vraisemblance sont les suivants :
+```{r, echo=FALSE}
+cols = c("ID", "angle1_mean", "angle1_std", "angle2_mean", "angle2_std", "angle3_mean", "angle3_std")
+knitr::kable(results_df[cols], booktabs = TRUE, digits = 3, align = 'c', escape = FALSE,
+              col.names = c("ID", "mean", "\\em{concentration}", "mean", "\\em{concentration}", "mean", "\\em{concentration}")) %>%
+    column_spec(c(3, 5, 7), italic = TRUE) %>%
+    row_spec(1, bold = TRUE) %>%
+    add_header_above(c(" " = 1, "Repos" = 2, "Pâturage" = 2, "Déplacement" = 2))
+
+knitr::opts_chunk$set(fig.width=12, fig.height=12)
+```
+
+## Distribution des angles
+```{r, echo=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=12)
+plot_results_page(6, IDs, run_index)
+```
+
+## Comportements et X en fonction du temps
+```{r, echo=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=12)
+plot_results_page(1, IDs, run_index)
+```
+
+## Comportements sur l’alpage
+```{r, echo=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=12)
+plot_results_page(3, IDs, run_index)
+```
+
+## Cycle journalier des comportements
+```{r, echo=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=12)
+plot_results_page(4, IDs, run_index)
+```
+
+
+```{r, echo=FALSE}
+npages = pdftools::pdf_info(paste0(output_dir,alpage,"/individual_trajectories/",IDs[1],".pdf"))$pages
+
+if(npages > 6) {
+  knitr::opts_chunk$set(fig.width=12, fig.height=12)
+  "## Dépendance aux covariables"
+
+  for (i in 7:npages) {
+    print(plot_results_page(i, IDs, run_index))
+  }
+}
+```

@@ -1,0 +1,4 @@
+"Collier","Bat","Programmation","Alpage","Espece","Race","Eleveur","Age","Periode_echantillonnage","proportion_jour_allume","date_pose","date_retrait","Column1","La.periode.doit.être.indiquée.en.secondes"
+"C00","B31","brebis","Alpage_demo","brebis","Merinos","G",NA,120,0.75,"10/07/2022 08:00:00","20/07/2022 08:00:00",NA,NA
+"C01","B34","brebis","Alpage_demo","brebis","Merinos","G",NA,120,0.75,"10/07/2022 08:00:00","20/07/2022 08:00:00",NA,NA
+"C02","B35","brebis","Alpage_demo","brebis","Merinos","G",NA,120,0.75,"10/07/2022 08:00:00","20/07/2022 08:00:00",NA,NA

@@ -1,0 +1,31 @@
+# Ignorer tout sauf la structure des dossiers
+
+# Partager entièrement le dossier Functions/
+!Functions/
+
+# raster/ (partagé mais vide sauf .gitkeep)
+raster/*
+!raster/.gitkeep
+
+# Ignorer tout le dossier data sauf Colliers_9999_brutes
+data/*
+!data/.gitkeep
+!data/Colliers_9999_brutes/
+!data/Colliers_9999_brutes/**
+
+# outputs/ (partagé mais vide sauf .gitkeep)
+outputs/*
+!outputs/.gitkeep
+
+# Scripts à garder
+!config.R
+!script_analysis.R
+
+# Ignorer fichiers temporaires et spécifiques à RStudio
+*.Rhistory
+*.Rproj.user
+*.RData
+*.log
+.DS_Store
+Thumbs.db
+.Rproj.user
