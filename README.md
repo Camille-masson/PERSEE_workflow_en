@@ -1,34 +1,6 @@
-
----
-title: "Catalog Processing - README"
-author: 'MASSON Camille / Adaptation of Rémy PERRON script'
-date: 'Last update: 23/09/2025'
-output:
-  html_document:
-    toc: true
-    toc_float: true
-    number_sections: true
-    theme: readable
-    css: styles.css
-  pdf_document:
-    toc: true
-    number_sections: true
-    latex_engine: xelatex
-    extra_dependencies: ["georgia"]
-fontsize: 12pt
-mainfont: Georgia
-geometry: margin=1in
----
-
-<style>
-  body {
-    font-family: Georgia, serif;
-    text-align: justify;
-  }
-  h1, h2, h3, h4, h5, h6 {
-    font-family: Georgia, serif;
-  }
-</style>
+# Catalog Processing – README
+**Author:** MASSON Camille / Adaptation of Rémy PERRON script  
+**Last update:** 23/09/2025
 
 ## Introduction
 
