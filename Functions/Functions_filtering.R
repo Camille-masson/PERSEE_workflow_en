@@ -227,37 +227,6 @@ identify_sampling_period <- function(data_dir, YEAR, TYPE, alpages, output_dir) 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 load_followit_data  <- function(input_file) {
     # INPUT :
     #     input_file : path to a csv file containing a Folowit trajectory
@@ -333,184 +302,6 @@ position_filter <- function(traject, medcrit=750, meancrit=500, spikesp=1500, sp
     
     return(traject@data)
 }
-
-
-
-
-
-
-
-
-filter_one_collar <- function(traject, collar_file, output_rds_file, alpage_name, beg_date, end_date, individual_info_file,
-                              bjoneraas.medcrit, bjoneraas.meancrit, bjoneraas.spikesp, bjoneraas.spikecos, sampling_period = 120) {
-    # Filters the relocation from one collar based on date and speed/position (Bjoneraas2010).
-    # The filtered trajectory is appended to output_rds_file
-    # INPUTS
-    #    traject : a data.frame containing the raw relocations of the collar, with columns date, lat and lon
-    #    collar_ID : the ID of the collar
-    #    output_rds_file : the rds file the filtered trajectory should be appended to
-    #    alpage_name : name of the alpage
-    #    beg_date : the date from which relocations are to be kept
-    #    end_date : the date until which relocations are to be kept
-    #    bjoneraas.medcrit, bjoneraas.meancrit, bjoneraas.spikesp, bjoneraas.spikecos : parameter of the Bjorneraas relocation errors filter
-    #    sampling_period : theoretical time between two consecutive relocations, in seconds
-    # OUPUTS
-    #    a one-row data.frame of performance indicators of the collar: name (collar ID), worked_until_end (1 if the collar didn’t stop working until 24 hours before beg_date), nloc (number of relocations) and error_perc (percentage of relocations removed by Bjoneraas2010 filter)
-
-    collar_ID = strsplit(collar_file, split = "_")[[1]][1]
-
-    beg_date = as.POSIXct(get_individual_info(collar_ID, individual_info_file, "date_pose"), tz="GMT", format="%d/%m/%Y %H:%M:%S")
-    end_date = as.POSIXct(get_individual_info(collar_ID, individual_info_file, "date_retrait"), tz="GMT", format="%d/%m/%Y %H:%M:%S")
-    day_prop = as.numeric(gsub(",", ".", get_individual_info(collar_ID, individual_info_file, "proportion_jour_allume"))) # proportion of day with collar switched on
-
-    n_loc_theory = as.numeric(difftime(end_date, beg_date, units = "secs")) * day_prop / sampling_period
-    print(paste("Working on", collar_ID, "from", beg_date, "to", end_date))
-
-    indicators = data.frame(name = collar_ID)
-    traject$ID <- collar_ID
-
-    # Filter on dates and compute corresponding indicators
-    traject <- date_filter(traject, beg_date, end_date)
-        # If there is less than one day missing at the end of the time-series, we consider that the collar worked until the end (1)
-    indicators$worked_until_end = ifelse(as.numeric(difftime(end_date, traject$date[nrow(traject)], units = "secs")) <= 24*3600, 1, 0)
-    indicators$nloc = nrow(traject)
-
-    # Filter on position and speed (Bjoneraas2010) and compute corresponding indicators
-    traject <- position_filter(traject, medcrit=bjoneraas.medcrit, meancrit=bjoneraas.meancrit, spikesp=bjoneraas.spikesp, spikecos=bjoneraas.spikecos)
-    indicators$R1error = sum(traject$R1error, na.rm=TRUE)
-    indicators$R2error = sum(traject$R2error, na.rm=TRUE)
-    indicators$localisation_rate = indicators$nloc/n_loc_theory
-    indicators$error_perc = (indicators$R1error + indicators$R2error)/nrow(traject)
-
-    traject <- traject[!traject$R1error & !traject$R2error,]
-    traject <- traject[!is.na(traject$x), ]
-    traject$alpage <- alpage_name
-    traject$R1error <- NULL
-    traject$R2error <- NULL
-    traject$species <- get_individual_info(collar_ID, individual_info_file, "Espece")
-    traject$race <- get_individual_info(collar_ID, individual_info_file, "Race")
-
-    colnames(traject)[4] <- "time"
-
-    save_append_replace_IDs(traject, file = output_rds_file)
-    return(indicators)
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-filter_one_collar <- function(traject, collar_file, output_rds_file, alpage_name, beg_date, end_date, individual_info_file,
-                              bjoneraas.medcrit, bjoneraas.meancrit, bjoneraas.spikesp, bjoneraas.spikecos, sampling_period = 120) {
-  # Version d'origine, avec nettoyage minimal AVANT position_filter()
-  # pour supporter proprement les trajectoires .Rdata (NAs lat/lon, bornes, ordre, etc.)
-  
-  collar_ID <- strsplit(collar_file, split = "_")[[1]][1]
-  
-  # Dates & proportion depuis IIF (inchangé)
-  beg_date <- as.POSIXct(get_individual_info(collar_ID, individual_info_file, "date_pose"),    tz="GMT", format="%d/%m/%Y %H:%M:%S")
-  end_date <- as.POSIXct(get_individual_info(collar_ID, individual_info_file, "date_retrait"), tz="GMT", format="%d/%m/%Y %H:%M:%S")
-  day_prop <- as.numeric(gsub(",", ".", get_individual_info(collar_ID, individual_info_file, "proportion_jour_allume")))
-  if (!is.finite(day_prop) || day_prop <= 0 || day_prop > 1) day_prop <- 1  # garde-fou discret
-  
-  n_loc_theory <- as.numeric(difftime(end_date, beg_date, units = "secs")) * day_prop / sampling_period
-  print(paste("Working on", collar_ID, "from", beg_date, "to", end_date))
-  
-  indicators <- data.frame(name = collar_ID)
-  traject$ID <- collar_ID
-  
-  # --- Nettoyage minimal pour fiabiliser catlog ET Rdata ---
-  # date au bon format + tri
-  if (!("date" %in% names(traject))) stop("La colonne 'date' est absente du traject.")
-  traject$date <- as.POSIXct(traject$date, tz = "GMT")
-  traject <- traject[!is.na(traject$date), ]
-  traject <- traject[order(traject$date), ]
-  
-  # lat/lon numériques et valides (évite 'NA values in coordinates')
-  traject$lat <- suppressWarnings(as.numeric(traject$lat))
-  traject$lon <- suppressWarnings(as.numeric(traject$lon))
-  traject <- traject[is.finite(traject$lat) & is.finite(traject$lon) &
-                       traject$lat >= -90 & traject$lat <= 90 &
-                       traject$lon >= -180 & traject$lon <= 180, ]
-  
-  # --- Filtre de dates (inchangé) ---
-  traject <- date_filter(traject, beg_date, end_date)
-  # worked_until_end & nloc (inchangé)
-  indicators$worked_until_end <- ifelse(as.numeric(difftime(end_date, traject$date[nrow(traject)], units = "secs")) <= 24*3600, 1, 0)
-  indicators$nloc <- nrow(traject)
-  
-  # --- Filtre position/vitesse (inchangé) ---
-  # (comme on a purgé les lat/lon invalides, plus d'erreur 'NA values in coordinates')
-  traject <- position_filter(traject,
-                             medcrit = bjoneraas.medcrit,
-                             meancrit = bjoneraas.meancrit,
-                             spikesp = bjoneraas.spikesp,
-                             spikecos = bjoneraas.spikecos)
-  
-  indicators$R1error <- sum(traject$R1error, na.rm=TRUE)
-  indicators$R2error <- sum(traject$R2error, na.rm=TRUE)
-  indicators$localisation_rate <- indicators$nloc / n_loc_theory
-  indicators$error_perc <- (indicators$R1error + indicators$R2error) / nrow(traject)
-  
-  # Garder les bons points (inchangé, avec un petit garde-fou sur x/y)
-  traject <- traject[!traject$R1error & !traject$R2error, ]
-  traject <- traject[is.finite(traject$x), ]  # au cas où
-  traject$alpage <- alpage_name
-  traject$R1error <- NULL
-  traject$R2error <- NULL
-  traject$species <- get_individual_info(collar_ID, individual_info_file, "Espece")
-  traject$race    <- get_individual_info(collar_ID, individual_info_file, "Race")
-  
-  # Renommage robuste 'date' -> 'time' (au lieu de colnames(traject)[4])
-  if ("date" %in% names(traject)) {
-    names(traject)[names(traject) == "date"] <- "time"
-  } else if (ncol(traject) >= 4) {
-    # fallback pour rester 100% compatible avec ton ancien flux
-    colnames(traject)[4] <- "time"
-  }
-  
-  save_append_replace_IDs(traject, file = output_rds_file)
-  return(indicators)
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -630,6 +421,30 @@ ensure_indicator_shape <- function(df) {
 
 
 
+get_sp_min_from_rds <- function(sampling_df, collar_id, collar_path = NULL) {
+  idc <- unique(c(build_id_candidates(collar_id),
+                  if (!is.null(collar_path)) build_id_candidates(collar_path)))
+  id_col <- intersect(names(sampling_df), c("ID","id","collar","collar_id","Name","name","Nom","CollarID"))
+  if (!length(id_col)) stop("Sampling RDS: colonne ID absente.")
+  id_col <- id_col[1]; sampling_df[[id_col]] <- as.character(sampling_df[[id_col]])
+  idx <- which(sampling_df[[id_col]] %in% idc)
+  if (!length(idx)) idx <- which(trimws(tolower(sampling_df[[id_col]])) %in% trimws(tolower(idc)))
+  if (!length(idx)) stop("Sampling: pas introuvable pour '", collar_id, "'.")
+  r <- sampling_df[idx[1], , drop=FALSE]
+  if ("SAMPLING" %in% names(r)) {
+    spm <- suppressWarnings(as.numeric(r$SAMPLING[1])); if (is.finite(spm) && spm > 0) return(spm)
+  }
+  if ("sampling_period" %in% names(r)) {
+    sps <- suppressWarnings(as.numeric(r$sampling_period[1]))
+    if (is.finite(sps) && sps > 0) { spm <- sps/60; if (abs(spm - round(spm)) < 1e-6) spm <- round(spm); return(spm) }
+  }
+  stop("Sampling: valeur invalide pour '", r[[id_col]][1], "'.")
+}
+choose_params_strict <- function(sp_minutes, bank) {
+  key <- as.character(sp_minutes); p <- bank[[key]]
+  if (is.null(p)) stop("param_bank: aucune entrée pour un pas de ", sp_minutes, " min.")
+  p
+}
 
 
 
@@ -638,11 +453,13 @@ ensure_indicator_shape <- function(df) {
 
 
 
-
-
-
-
-
+build_id_candidates <- function(x) {
+  stem   <- tools::file_path_sans_ext(basename(x))
+  first  <- sub("[_-].*$", "", stem)
+  digits <- gsub("\\D+", "", first)
+  idless <- sub("^id", "", tolower(first))
+  unique(c(stem, first, tolower(stem), tolower(first), toupper(stem), toupper(first), digits, idless))
+}
 
 
 

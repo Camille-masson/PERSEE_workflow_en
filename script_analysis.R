@@ -333,7 +333,6 @@ if (TRUE) {
   # A .CSV file "Colliers_poses"
   IIF = file.path(raw_data_dir, paste0(YEAR,"_colliers_poses.csv"))
   check_and_correct_csv(IIF)
-  
   # OPTONIAL CKECK
   #str(read.csv(IIF, stringsAsFactors = FALSE, encoding = "UTF-8"))
   
@@ -345,14 +344,12 @@ if (TRUE) {
   
   
   # A .rds file "sampling periode" identify in the part 0.
-  
-  
   filter_output_dir <- file.path(output_dir, "0. Sampling_Periods")
   sampling_period_file <- file.path(filter_output_dir, paste0("Sampling_periods_", YEAR, "_",alpage,".rds"))
   sampling <- readRDS(sampling_period_file)
   
   
-  # List of parameters for the different stampling period
+  # List of parameters for the different stampling period   !!!!!!!! A voir avec mathieu !!!!!!!!!!!!!!
   param_bank <- list(
     "1"  = list(medcrit = 650,  meancrit = 500, spikesp = 1500, spikecos = -0.95),
     "2"  = list(medcrit = 750,  meancrit = 500, spikesp = 1500, spikecos = -0.95),
@@ -377,17 +374,17 @@ if (TRUE) {
   
   
   
-  ## --- BOUCLE PRINCIPALE ---
+  ## CODE ##
   for (alpage in alpages) {
     message("WORKING ON ALPAGE :", alpage)
     
-    # RDS des pas (par alpage)
+    # Sampling (par alpage)
     sp_dir  <- file.path(output_dir, "0. Sampling_Periods")
     sp_path <- file.path(sp_dir, paste0("Sampling_periods_", YEAR, "_", alpage, ".rds"))
     if (!file.exists(sp_path)) stop("Sampling RDS manquant: ", sp_path)
     sampling <- readRDS(sp_path)
     
-    # Fichiers bruts selon TYPE
+    # Fichiers bruts
     collar_dir   <- file.path(raw_data_dir, alpage)
     file_pattern <- if (TYPE == "catlog") "\\.csv$" else "\\.Rdata$"
     read_fun     <- if (TYPE == "catlog") load_catlog_data else load_other_data_rdata
@@ -395,51 +392,41 @@ if (TRUE) {
     if (!length(collar_files)) { warning("Aucun fichier ", file_pattern, " pour ", alpage); next }
     
     # Sorties par alpage
-    out_dir <- file.path(output_dir, "2. Filtre_de_Bjorneraas")
-    if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
     output_rds_file <- file.path(out_dir, paste0("Catlog_", YEAR, "_filtered_", alpage, ".rds"))
     indicator_file  <- file.path(out_dir, paste0(YEAR, "_filtering_", alpage, ".csv"))
     
-    # Traitement collier par collier
     indicators_list <- lapply(collar_files, function(collar) {
       collar_base <- basename(collar)
       collar_ID   <- sub("[_-].*$", "", tools::file_path_sans_ext(collar_base))
       
-      # 1) SAMPLING -> params
       sp_min <- get_sp_min_from_rds(sampling, collar_ID, collar)
       p      <- choose_params_strict(sp_min, param_bank)
       message(sprintf("Collier: %s | SAMPLING=%s min -> medcrit=%s meancrit=%s spikesp=%s spikecos=%s",
                       collar_base, sp_min, p$medcrit, p$meancrit, p$spikesp, p$spikecos))
       
-      # 2) Lecture du collier
       dat <- read_fun(collar)
       
-      # 3) Filtre + indicateurs (on passe beg/end en NA car la fonction lit IIF)
       res <- tryCatch(
         filter_one_collar(
           traject = dat,
           collar_file = collar_base,
           output_rds_file = output_rds_file,
           alpage_name = alpage,
-          beg_date = NA,                 # <- ta fonction utilise IIF pour les dates
-          end_date = NA,                 # <- idem
+          beg_date = NA, end_date = NA,
           individual_info_file = IIF,
           bjoneraas.medcrit  = p$medcrit,
           bjoneraas.meancrit = p$meancrit,
           bjoneraas.spikesp  = p$spikesp,
           bjoneraas.spikecos = p$spikecos,
-          sampling_period = as.numeric(sp_min) * 60
+          sampling_period    = as.numeric(sp_min) * 60
         ),
         error = function(e) {
           warning(sprintf("Collier %s: %s", collar_base, e$message))
           data.frame(
             name = collar_ID,
-            worked_until_end = NA_integer_,
-            nloc = NA_integer_,
-            R1error = NA_integer_,
-            R2error = NA_integer_,
-            localisation_rate = NA_real_,
-            error_perc = NA_real_,
+            worked_until_end = NA_integer_, nloc = NA_integer_,
+            R1error = NA_integer_, R2error = NA_integer_,
+            localisation_rate = NA_real_,  error_perc = NA_real_,
             stringsAsFactors = FALSE
           )
         }
@@ -448,18 +435,15 @@ if (TRUE) {
       ensure_indicator_shape(res)
     })
     
-    # Agrégation robuste
     indicators <- dplyr::bind_rows(indicators_list)
     
-    # Ligne TOTAL
     if (nrow(indicators)) {
       indicators <- dplyr::bind_rows(
         indicators,
         data.frame(
           name = paste("TOTAL", alpage),
           worked_until_end = sum(indicators$worked_until_end == 1, na.rm = TRUE),
-          nloc = NA,
-          R1error = NA, R2error = NA,
+          nloc = NA, R1error = NA, R2error = NA,
           error_perc = sum(indicators$nloc * indicators$error_perc, na.rm = TRUE) /
             sum(indicators$nloc, na.rm = TRUE),
           localisation_rate = mean(indicators$localisation_rate, na.rm = TRUE),
@@ -468,7 +452,6 @@ if (TRUE) {
       )
     }
     
-    # Écriture append (sans en-têtes)
     write.table(indicators, file = indicator_file, append = TRUE, sep = ",",
                 row.names = FALSE, col.names = FALSE)
   }
