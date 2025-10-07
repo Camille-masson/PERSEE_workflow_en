@@ -3,21 +3,63 @@
 #----------------------------------#
 gc()
 
-# Loading configuration
+## Loading configuration ##
 source("config.R")
 
-# Definition of the analysis year and the alpine pastures to process
-YEAR = 9999 
+## Definition of the analysis year and the alpine pastures to process ##
+YEAR = 9999
 alpage = "Alpage_demo"
 alpages = "Alpage_demo"
+TYPE <- "catlog" #Type of input data : catlog (at 2 minute) or other (catlog/other)
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
-  "2022" = c("Ane-et-Buyant", "Cayolle", "Combe-Madame", "Grande-Fesse", "Jas-des-Lievres", "Lanchatra", "Pelvas", "Sanguiniere", "Viso"),
-  "2023" = c("Cayolle", "Crouzet", "Grande-Cabane", "Lanchatra", "Rouanette", "Sanguiniere", "Vacherie-de-Roubion", "Viso"),
+  "2013" = c("Combe-Madame"),
+  "2014" = c("Combe-Madame"),
+  "2015" = c("Combe-Madame"),
+  "2016" = c("Combe-Madame"),
+  "2017" = c("Combe-Madame"),
+  "2018" = c("Ane-et-Buyant", "Bedina", "Pesee", "Sept-Laux"),
+  "2019" = c("Ane-et-Buyant", "Bedina", "Pesee", "Sept-Laux"),
+  "2020" = c("Ane-et-Buyant", "Bedina", "Pesee","Rieuxclaret", "Sept-Laux"),
+  "2021" = c("Ane-et-Buyant", "Bedina", "Pesee","Combe-Madame", "Sept-Laux"),
+  "2022" = c("Ane-et-Buyant", "Bedina", "Cayolle", "Combe-Madame", "Grande-Fesse", "Jas-des-Lievres", "Lanchatra", "Pelvas","Pesee", "Sanguiniere","Sept-Laux", "Viso"),
+  "2023" = c("Ane-et-Buyant", "Bedina", "Cayolle", "Crouzet", "Combe", "Combe-Madame", "Grande-Cabane", "Lanchatra", "Pesee", "Rouanette", "Sanguiniere", "Sept-Laux", "Vacherie-de-Roubion", "Viso"),
   "2024" = c("Viso", "Cayolle", "Sanguiniere")
 )
 ALPAGES <- ALPAGES_TOTAL[[as.character(YEAR)]]
+
+
+
+
+
+## Definition of the sampling period ##
+if (TRUE){
+  
+  source(file.path(functions_dir, "Functions_filtering.R"))
+  
+  
+  ## INPUT ##
+  
+  # A folder containing the raw trajectories
+  raw_data_dir <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"))
+  
+  
+  
+  ## OUTPUT ##
+  
+  # Creation of the subfolder to store the sampling periods
+  filter_output_dir <- file.path(output_dir, "0. Sampling_Periods")
+  if (!dir.exists(filter_output_dir)) {
+    dir.create(filter_output_dir, recursive = TRUE)
+  }
+  
+  sampling_periods <- identify_sampling_period(data_dir, YEAR, TYPE, alpages, output_dir)
+  
+  print(sampling_periods)
+  
+}
+
 
 
 #### 1. Simplification in GPKG ####
@@ -38,33 +80,99 @@ if (TRUE) {
   source(file.path(functions_dir, "Functions_filtering.R"))
   
   ## INPUT ##
-  # Un dossier contenant les trajectoires brutes, au format csv issu des colliers catlog rangées dans des sous-dossiers au nom de leurs alpages
+  # A folder containing the raw trajectories in CSV format from Catlog collars, organized into subfolders named after their alpine pastures
   raw_data_dir <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"))
   
+  # An .RDS file of the sampling periods starting from 0
+  sampling_period_file <- file.path(output_dir, "Sampling_Periods", paste0("Sampling_Periods_", YEAR, "_", alpage, ".rds"))
+  sampling_periods <- readRDS(sampling_period_file)
+  
+  
   ## OUTPUT ##
-  # Création du sous-dossier de sortie : GPS_simple_GPKG
+  # Creation of the output subfolder: GPS_simple_GPKG
   gps_output_dir <- file.path(output_dir, "1. GPS_simple_GPKG")
   if (!dir.exists(gps_output_dir)) {
     dir.create(gps_output_dir, recursive = TRUE)
   }
-  # Créeation du GPKG de sortie nommé : Donnees_brutes_9999_Alpage_demo_simplifiees.gpkg
+  # Creation of the output GPKG named: Donnees_brutes_9999_Alpage_demo_simplifiees.gpkg
   output_file <- file.path(gps_output_dir, paste0("Donnees_brutes_", YEAR, "_", alpage, "_simplifiees.gpkg"))
   
   
   ## CODE ##
   
   lapply(alpages, function(alpage) {
-    collar_dir <- file.path(raw_data_dir, alpage) 
-    collar_files <- list.files(collar_dir, full.names = TRUE) 
+    collar_dir <- file.path(raw_data_dir, alpage)
+    
+    # Sélection du type de fichier
+    file_pattern <- if (TYPE == "catlog") "\\.csv$" else "\\.Rdata$"
+    collar_files <- list.files(collar_dir, pattern = file_pattern, full.names = TRUE)
+    
+    if (length(collar_files) == 0) {
+      warning(paste("No files found in", collar_dir, "for TYPE =", TYPE))
+      return(NULL)
+    }
+    
     lapply(collar_files, function(collar_f) {
-      collar_ID <- substr(basename(collar_f), 1, 3)
-      load_catlog_data(collar_f) %>% 
-        slice(which(row_number() %% 30 == 10)) %>% 
-        mutate(ID = collar_ID, date = lubridate::format_ISO8601(date)) %>% 
-        vect(geom = c("lon", "lat"), crs = CRS_WSG84) 
-    }) %>% do.call(rbind, .) 
-  }) %>% do.call(rbind, .) %>%
-    writeVector(filename = output_file, overwrite = TRUE) 
+      # Extraction de l'ID du collier
+      collar_ID <- if (TYPE == "catlog") {
+        strsplit(basename(collar_f), split = "_")[[1]][1]
+      } else {
+        strsplit(basename(collar_f), split = "_")[[1]][1]
+      }
+      
+      print(paste("Processing file:", collar_f, "Collar ID:", collar_ID))
+      
+      # Charger les données GPS
+      traject <- switch(
+        TYPE,
+        "catlog" = load_catlog_data(collar_f),
+        "other" = load_other_data_rdata(collar_f),
+        stop("Unrecognized TYPE: please choose 'catlog' or 'other'")
+      )
+      
+      # Vérifier si les données sont vides
+      if (is.null(traject) || nrow(traject) == 0) {
+        warning(paste("Empty dataset after loading:", collar_f))
+        return(NULL)
+      }
+      
+      # Récupérer le sampling_period pour ce collier
+      sampling_period <- sampling_periods %>%
+        filter(ID == collar_ID) %>%
+        pull(SAMPLING)
+      
+      # Si aucun sampling_period trouvé, erreur
+      if (length(sampling_period) == 0 || is.na(sampling_period)) {
+        stop(paste("ERREUR: Aucun sampling_period trouvé pour le collier", collar_ID))
+      }
+      
+      # Ajustement vers un échantillonnage de 30 minutes
+      if (sampling_period != 30) {
+        print(paste("Collar", collar_ID, "has sampling_period =", sampling_period, "minutes. Resampling to 30 minutes."))
+        
+        # Calcul du facteur de réduction
+        reduction_factor <- round(30 / sampling_period)
+        
+        # Application du filtre
+        traject <- traject %>% slice(which(row_number() %% reduction_factor == 1))
+      }
+      
+      # Transformation et formatage des données
+      traject <- traject %>%
+        mutate(ID = collar_ID, date = lubridate::format_ISO8601(date)) %>%
+        vect(geom = c("lon", "lat"), crs = CRS_WSG84)
+      
+      return(traject)
+    }) %>% do.call(rbind, .)  # Fusionner les données des colliers d'un même alpage
+  }) %>% do.call(rbind, .) -> merged_data  # Fusion finale pour tous les alpages
+  
+  # Vérifier si les données fusionnées sont vides
+  if (is.null(merged_data) || nrow(merged_data) == 0) {
+    stop("No data available to export to GPKG. Check input files and processing steps.")
+  }
+  
+  # Exporter les données vers un fichier GPKG
+  writeVector(merged_data, filename = output_file, overwrite = TRUE)
 }
 
 #### 2.1 BJONERAAS FILTER CALIBRATION ####
@@ -235,6 +343,26 @@ if (TRUE) {
   # OPTONIAL CKECK
   #str(read.csv(AIF, stringsAsFactors = FALSE, encoding = "UTF-8"))
   
+  
+  # A .rds file "sampling periode" identify in the part 0.
+  
+  
+  filter_output_dir <- file.path(output_dir, "0. Sampling_Periods")
+  sampling_period_file <- file.path(filter_output_dir, paste0("Sampling_periods_", YEAR, "_",alpage,".rds"))
+  sampling <- readRDS(sampling_period_file)
+  
+  
+  # List of parameters for the different stampling period
+  param_bank <- list(
+    "1"  = list(medcrit = 650,  meancrit = 500, spikesp = 1500, spikecos = -0.95),
+    "2"  = list(medcrit = 750,  meancrit = 500, spikesp = 1500, spikecos = -0.95),
+    "10" = list(medcrit = 1000, meancrit = 500, spikesp = 1500, spikecos = -0.95),
+    "15" = list(medcrit = 1100, meancrit = 500, spikesp = 1500, spikecos = -0.95),
+    "20" = list(medcrit = 1200, meancrit = 500, spikesp = 1500, spikecos = -0.95),
+    "30" = list(medcrit = 1300, meancrit = 500, spikesp = 1500, spikecos = -0.95)
+  )
+  
+  
   ## OUTPUTS ##
   filter_output_dir <- file.path(output_dir, "2. Filtre_de_Bjorneraas")
   if (!dir.exists(filter_output_dir)) {
@@ -247,52 +375,117 @@ if (TRUE) {
   # A .csv file containing the collar performance
   indicator_file = file.path(filter_output_dir, paste0(YEAR,"_filtering_",alpages,".csv"))
   
-  ## CODE ##
+  
+  
+  ## --- BOUCLE PRINCIPALE ---
   for (alpage in alpages) {
-    print(paste("WORKING ON ALPAGE :", alpage))
-    collar_dir <- file.path(raw_data_dir, alpage)
-    collar_files <- list.files(collar_dir, pattern = ".csv", full.names = TRUE)
+    message("WORKING ON ALPAGE :", alpage)
     
-    # Optional (advanced users wishing to adapt the parameters to each alpine pasture):
-    # fill in the CSV file "infos_alpages" with the correct parameters.
-    # medcrit = get_alpage_info(alpage, AIF, "medcrit")
-    # meancrit = get_alpage_info(alpage, AIF, "meancrit")
-    # spikesp = get_alpage_info(alpage, AIF, "spikesp")
-    # spikecos = as.numeric(gsub(",", ".", get_alpage_info(alpage, AIF, "spikecos")))
-
+    # RDS des pas (par alpage)
+    sp_dir  <- file.path(output_dir, "0. Sampling_Periods")
+    sp_path <- file.path(sp_dir, paste0("Sampling_periods_", YEAR, "_", alpage, ".rds"))
+    if (!file.exists(sp_path)) stop("Sampling RDS manquant: ", sp_path)
+    sampling <- readRDS(sp_path)
     
-    medcrit = 750
-    meancrit = 500
-    spikesp = 1500
-    spikecos = -0.95
-    print(paste0("Bjorneraas filter parameters: medcrit=",medcrit,", meancrit=", meancrit, ", spikesp=", spikesp, ", spikecos=", spikecos))
-    print(collar_files)
+    # Fichiers bruts selon TYPE
+    collar_dir   <- file.path(raw_data_dir, alpage)
+    file_pattern <- if (TYPE == "catlog") "\\.csv$" else "\\.Rdata$"
+    read_fun     <- if (TYPE == "catlog") load_catlog_data else load_other_data_rdata
+    collar_files <- list.files(collar_dir, pattern = file_pattern, full.names = TRUE)
+    if (!length(collar_files)) { warning("Aucun fichier ", file_pattern, " pour ", alpage); next }
     
+    # Sorties par alpage
+    out_dir <- file.path(output_dir, "2. Filtre_de_Bjorneraas")
+    if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+    output_rds_file <- file.path(out_dir, paste0("Catlog_", YEAR, "_filtered_", alpage, ".rds"))
+    indicator_file  <- file.path(out_dir, paste0(YEAR, "_filtering_", alpage, ".csv"))
     
-    # Filtering of trajectories and calculation of indicators
-    indicators <- lapply(collar_files, function(collar) {
-      filter_one_collar(
-        load_catlog_data(collar),  
-        basename(collar), 
-        output_rds_file, alpage, beg_date, end_date, IIF,
-        bjoneraas.medcrit = medcrit,
-        bjoneraas.meancrit = meancrit,
-        bjoneraas.spikesp = spikesp,
-        bjoneraas.spikecos = spikecos
+    # Traitement collier par collier
+    indicators_list <- lapply(collar_files, function(collar) {
+      collar_base <- basename(collar)
+      collar_ID   <- sub("[_-].*$", "", tools::file_path_sans_ext(collar_base))
+      
+      # 1) SAMPLING -> params
+      sp_min <- get_sp_min_from_rds(sampling, collar_ID, collar)
+      p      <- choose_params_strict(sp_min, param_bank)
+      message(sprintf("Collier: %s | SAMPLING=%s min -> medcrit=%s meancrit=%s spikesp=%s spikecos=%s",
+                      collar_base, sp_min, p$medcrit, p$meancrit, p$spikesp, p$spikecos))
+      
+      # 2) Lecture du collier
+      dat <- read_fun(collar)
+      
+      # 3) Filtre + indicateurs (on passe beg/end en NA car la fonction lit IIF)
+      res <- tryCatch(
+        filter_one_collar(
+          traject = dat,
+          collar_file = collar_base,
+          output_rds_file = output_rds_file,
+          alpage_name = alpage,
+          beg_date = NA,                 # <- ta fonction utilise IIF pour les dates
+          end_date = NA,                 # <- idem
+          individual_info_file = IIF,
+          bjoneraas.medcrit  = p$medcrit,
+          bjoneraas.meancrit = p$meancrit,
+          bjoneraas.spikesp  = p$spikesp,
+          bjoneraas.spikecos = p$spikecos,
+          sampling_period = as.numeric(sp_min) * 60
+        ),
+        error = function(e) {
+          warning(sprintf("Collier %s: %s", collar_base, e$message))
+          data.frame(
+            name = collar_ID,
+            worked_until_end = NA_integer_,
+            nloc = NA_integer_,
+            R1error = NA_integer_,
+            R2error = NA_integer_,
+            localisation_rate = NA_real_,
+            error_perc = NA_real_,
+            stringsAsFactors = FALSE
+          )
+        }
       )
-    }) %>%
-      do.call(rbind, .)
+      
+      ensure_indicator_shape(res)
+    })
     
-    indicators_tot = indicators %>%
-      filter(worked_until_end == 1) %>% 
-      add_row(name = paste("TOTAL", alpage), worked_until_end = sum(.$worked_until_end), nloc = NA,
-              R1error = NA, R2error = NA,
-              error_perc = sum(.$nloc*.$error_perc)/sum(.$nloc), localisation_rate = mean(.$localisation_rate))
-    indicators = rbind(indicators, indicators_tot[nrow(indicators_tot),])
+    # Agrégation robuste
+    indicators <- dplyr::bind_rows(indicators_list)
     
-    write.table(indicators, file=indicator_file, append = T, sep=',', row.names=F, col.names=F)
+    # Ligne TOTAL
+    if (nrow(indicators)) {
+      indicators <- dplyr::bind_rows(
+        indicators,
+        data.frame(
+          name = paste("TOTAL", alpage),
+          worked_until_end = sum(indicators$worked_until_end == 1, na.rm = TRUE),
+          nloc = NA,
+          R1error = NA, R2error = NA,
+          error_perc = sum(indicators$nloc * indicators$error_perc, na.rm = TRUE) /
+            sum(indicators$nloc, na.rm = TRUE),
+          localisation_rate = mean(indicators$localisation_rate, na.rm = TRUE),
+          stringsAsFactors = FALSE
+        )
+      )
+    }
+    
+    # Écriture append (sans en-têtes)
+    write.table(indicators, file = indicator_file, append = TRUE, sep = ",",
+                row.names = FALSE, col.names = FALSE)
   }
+
+
+
+
 }
+
+
+
+
+
+
+
+
+
 
 #### 3. HMM FITTING #### 
 #----------------------#
