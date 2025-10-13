@@ -56,31 +56,56 @@ split_at_gap <- function(data, max_gap = 60, shortest_track = 0) {
     return(data)
 }
 
-regularise_trajectories <- function(data, sampling_period = 120) {
-    # sampling_period in seconds
-    # Returns a dataframe
-
-    # Use function from utility_function.R to split data at gaps > 20 min, keep only tracks longer than 2h
-    data <- split_at_gap(data = data, max_gap = 20, shortest_track = 2*60)
-
-    # Create adehabitat trajectory padded with NAs
-    data <- data %>%
-      group_by(ID) %>%
-      group_modify( function(df, group_id) {
-                      data_na <- setNA(ltraj = as.ltraj(xy = df[, c("x", "y")],
-                                                        date = df$time,
-                                                        id = group_id),
-                                       date.ref = df$time[5],
-                                       dt = sampling_period, tol = 60, units = "sec")
-                      data_na <- ld(data_na)[, c("x", "y", "date")] #convert back to data.frame and select usefull columns only
-                      colnames(data_na) <- c("x", "y", "time")
-                      return(data_na)
-                  }, .keep = FALSE ) %>%
-      ungroup() %>%
-      as.data.frame()
-
+regularise_trajectories <- function(data, sampling_period, max_gap = 90) {
+  cat(paste0("[INFO] Début de la régularisation des trajectoires avec max_gap = ", max_gap, " minutes.\n"))
+  flush.console()
+  
+  #Définition de max_gap si inférieur ou égale a 10 min vu sous échantillonage autamatique a 10 min max gap = sampling *2, pareil pour le reste
+  if (sampling_period <= 600){ max_gap = 20} else {max_gap = sampling_period/60 * 2}
+  
+  
+  # Segmentation en fonction des gaps
+  data <- split_at_gap(data = data, max_gap = max_gap, shortest_track = 2 * 60)
+  cat("[INFO] Segmentation des trajectoires effectuée.\n")
+  flush.console()
+  
+  #  Si l'échantillonnage est déjà >= 10 min (600 sec), NE PAS RÉGULARISER
+  if (sampling_period >= 600) {
+    cat(paste0("[INFO] Aucun rééchantillonnage nécessaire (sampling_period = ", sampling_period, " sec).\n"))
+    flush.console()
     return(data)
+  }
+  
+  cat("[INFO] Application de la régularisation temporelle...\n")
+  flush.console()
+  
+  if (!("ID" %in% colnames(data))) {
+    stop("[ERREUR] La colonne ID est manquante dans les données.")
+  }
+  
+  data <- data %>%
+    group_by(ID) %>%
+    group_modify(function(df, group_id) {
+      if (nrow(df) < 2) return(df)  # Évite les erreurs sur les petits groupes
+      
+      data_na <- setNA(
+        ltraj = as.ltraj(xy = df[, c("x", "y")], date = df$time, id = group_id),
+        date.ref = df$time[1],
+        dt = sampling_period, tol = 60, units = "sec"
+      )
+      data_na <- ld(data_na)[, c("x", "y", "date")]
+      colnames(data_na) <- c("x", "y", "time")
+      return(data_na)
+    }) %>%
+    ungroup() %>%
+    as.data.frame()
+  
+  cat("[INFO] Régularisation terminée.\n")
+  flush.console()
+  
+  return(data)
 }
+
 
 rolling_averaging_trajectories <- function(data, conv) {
     data <- data %>%
@@ -339,33 +364,118 @@ parameters_to_rds <- function(run_parameters, output_rds_file) {
     }
 }
 
-viterbi_trajectory_to_rds  <- function(data_hmm, output_file, individual_info_file) {
-    individual_info <- read.csv(individual_info_file, header=TRUE)
 
-    data_save <- as.data.frame(subset(data_hmm, select = -c(step, angle)))
-    stateNames <- c("Repos", "Paturage", "Deplacement")
-    data_save$state = stateNames[data_save$state]
-    data_save <- data_save[!is.na(data_save$x),]
 
-    collar_indexes = as.numeric(sapply(data_save$ID, function(id) which(individual_info$Collier==id)))
-    data_save$alpage <- individual_info$Alpage[collar_indexes]
-    data_save$species <- individual_info$Espece[collar_indexes]
-    data_save$race <- individual_info$Race[collar_indexes]
-
-    # Sauvegarde en RDS
-    save_append_replace_IDs(data_save, file = output_file)
+viterbi_trajectory_to_rds <- function(data_hmm, output_file, individual_info_file) {
+  cat("[INFO] Adaptation et sauvegarde des trajectoires HMM en cours...\n"); flush.console()
+  
+  if (!file.exists(individual_info_file)) {
+    stop("[ERREUR] Fichier `individual_info_file` introuvable : ", individual_info_file)
+  }
+  individual_info <- read.csv(individual_info_file, header = TRUE, stringsAsFactors = FALSE)
+  
+  required_cols <- c("Collier", "Alpage", "Espece", "Race")
+  missing_cols <- setdiff(required_cols, colnames(individual_info))
+  if (length(missing_cols) > 0) {
+    stop("[ERREUR] Colonnes manquantes dans `individual_info_file` : ",
+         paste(missing_cols, collapse = ", "))
+  }
+  
+  data_save <- as.data.frame(subset(data_hmm, select = -c(step, angle)))
+  stateNames <- c("Repos", "Paturage", "Deplacement")
+  data_save$state <- factor(stateNames[data_save$state], levels = stateNames)
+  data_save <- data_save[!is.na(data_save$x), ]
+  
+  merged_data <- merge(data_save, individual_info, by.x = "ID", by.y = "Collier", all.x = TRUE)
+  
+  ## --- HARMONISATION MINIMALE POUR ÉVITER L'ERREUR SUR CATLOG ---
+  # 1) Alpage -> alpage (si pas déjà présent)
+  if (!"alpage" %in% names(merged_data) && "Alpage" %in% names(merged_data)) {
+    merged_data$alpage <- merged_data$Alpage
+  }
+  # 2) hour depuis time si absent
+  if (!"hour" %in% names(merged_data) && "time" %in% names(merged_data)) {
+    # heure décimale (H + M/60)
+    hh <- suppressWarnings(as.numeric(format(merged_data$time, "%H")))
+    mm <- suppressWarnings(as.numeric(format(merged_data$time, "%M")))
+    merged_data$hour <- hh + mm/60
+  }
+  # 3) state_proba si nom différent/absente (optionnel mais sûr)
+  if (!"state_proba" %in% names(merged_data)) {
+    # essaie quelques variantes usuelles
+    alt <- intersect(c("stateProb","state_prob","stateproba"), names(merged_data))
+    if (length(alt)) {
+      merged_data$state_proba <- merged_data[[alt[1]]]
+    } else {
+      # sinon NA (meilleur que de planter)
+      merged_data$state_proba <- NA_real_
+    }
+  }
+  
+  # 4) Assure la présence de toutes les colonnes attendues
+  final_cols <- c("ID","time","x","y","hour","state","state_proba","alpage","Espece","Race")
+  for (nm in setdiff(final_cols, names(merged_data))) merged_data[[nm]] <- NA
+  
+  final_data <- merged_data[, final_cols]
+  
+  # Renomme Espece/Race -> species/race
+  names(final_data)[names(final_data)=="Espece"] <- "species"
+  names(final_data)[names(final_data)=="Race"]   <- "race"
+  
+  tryCatch({
+    saveRDS(final_data, file = output_file)
+    cat("[INFO] Sauvegarde réussie dans : ", output_file, "\n")
+  }, error = function(e) {
+    cat("[ERREUR] Impossible d'enregistrer le fichier RDS !\nMessage: ", e$message, "\n")
+  })
+  flush.console()
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # Utility functions
-scale_step_parameters_to_resampling_ratio <- function(run_parameters) {
-    run_parameters$Par0$step[2] = run_parameters$resampling_ratio * run_parameters$Par0$step[2]
-    run_parameters$Par0$step[5] = sqrt(run_parameters$resampling_ratio) * run_parameters$Par0$step[5]
-    run_parameters$Par0$step[3] = run_parameters$resampling_ratio * run_parameters$Par0$step[3]
-    run_parameters$Par0$step[6] = sqrt(run_parameters$resampling_ratio) * run_parameters$Par0$step[6]
 
-    return(run_parameters)
+scale_step_parameters_to_resampling_ratio <- function(run_parameters, alpage, sampling_parameters) {
+  sampling_period <- sampling_parameters$sampling_period  
+  scaling_factor <- sampling_parameters$param_scaling_factor
+  
+  print(paste0("[INFO] Ajustement des paramètres basé sur un échantillonnage de ", sampling_period, 
+               " min avec un facteur de conversion de ", scaling_factor))
+  
+  if (alpage == "Combe-Madame") {
+    print(paste0("[INFO] Réduction des transitions rapides pour minimiser la dominance du pâturage sur l'alpage : ", alpage))
+    
+    run_parameters$Par0$step[2] <- 0.8 * scaling_factor * run_parameters$Par0$step[2]
+    run_parameters$Par0$step[5] <- 0.8 * sqrt(scaling_factor) * run_parameters$Par0$step[5]
+    run_parameters$Par0$step[3] <- 0.8 * scaling_factor * run_parameters$Par0$step[3]
+    run_parameters$Par0$step[6] <- 0.8 * sqrt(scaling_factor) * run_parameters$Par0$step[6]
+  } else {
+    print(paste0("[INFO] Application des ajustements standards pour l'alpage : ", alpage))
+    
+    run_parameters$Par0$step[2] <- scaling_factor * run_parameters$Par0$step[2]
+    run_parameters$Par0$step[5] <- sqrt(scaling_factor) * run_parameters$Par0$step[5]
+    run_parameters$Par0$step[3] <- scaling_factor * run_parameters$Par0$step[3]
+    run_parameters$Par0$step[6] <- sqrt(scaling_factor) * run_parameters$Par0$step[6]
+  }
+  
+  print("[INFO] Ajustement terminé.")
+  return(run_parameters)
 }
+
 
 
 
@@ -383,7 +493,7 @@ scale_step_parameters_to_resampling_ratio <- function(run_parameters) {
 
 
 ### Fonction parallèle modifiée
-par_HMM_fit <- function(data, run_parameters, ncores, individual_info_file, sampling_period, output_dir) {
+
   # Paralelized wrapper for hmm_fit
   # Fit a momentuHMM hmm on one several individuals’ trajectories and save the resulting figures.
   # INPUTS :
@@ -393,53 +503,80 @@ par_HMM_fit <- function(data, run_parameters, ncores, individual_info_file, samp
   # OUTPUT : a list of the individual’s momentuHMM objects. Each momentuHMM object’s $data field contains the original trajectory (or sub-trajectories), ordered by time,
   #          along with the viterbi states sequence, the state probabilities and the original ID (only the first ID is retained)
   
-  
-  
-  # Paralelized wrapper for hmm_fit
-  print("+++ momentuHMM parallel RUN +++")
+par_HMM_fit <- function(data, run_parameters_list, ncores,
+                        individual_info_file, sampling_table,
+                        output_dir, pdf_dir) {              # <-- pdf_dir ici
+  cat("[INFO] Démarrage de l'exécution parallèle de momentuHMM...\n"); flush.console()
   startTime <- Sys.time()
+  clus <- makeCluster(ncores, outfile = "")
   
-  clus <- makeCluster(ncores, outfile = '')
-  clusterExport(clus, as.list(lsf.str(.GlobalEnv)))
-  clusterExport(clus, list("data", "run_parameters", "output_dir", "individual_info_file", "raster_dir", "CRS_L93"), envir = environment())
+  # objets/export minimal + pdf_dir
+  clusterExport(clus, list("data","run_parameters_list","individual_info_file",
+                           "sampling_table","pdf_dir"), envir = environment())
   
-  # Loading libraries and functions into the clusters
-  clusterCall(clus, function() {
+  # IMPORTANT : sourcer les fonctions HMM côté workers
+  clusterEvalQ(clus, {
     options(warn = -1)
     suppressPackageStartupMessages(library(tidyverse))
-    theme_set(theme_bw())
-    library(lubridate)
-    library(momentuHMM)
-    library(adehabitatLT)
-    library(sf)
-    library(sp)
-    library(terra)
-    source("Functions/Functions_utility.R")  # Courtesy Théo Michelot
-    BACKGROUND_TYPE <- "BDALTI"
+    library(lubridate); library(momentuHMM); library(adehabitatLT)
+    library(sf); library(sp); library(terra)
+    source("Functions/Functions_utility.R")
     source("Functions/Functions_map_plot.R")
     source("Functions/Constants.R")
+    source("Functions/Functions_HMM_fitting.R")  
     options(warn = 0)
+    NULL
   })
   
   results <- parLapply(clus, unique(data$ID), function(ID) {
-    # Retrieval of the alpine pasture for this individual
+    # log temporaire
+    log_file <- file.path(tempdir(), paste0("log_", ID, ".txt"))  # <-- tempdir()
+    sink(log_file, append = TRUE, split = TRUE)
+    
+    cat(paste0("[INFO] Traitement de l'individu ID: ", ID, "\n")); flush.console()
     alpage <- get_individual_alpage(ID, individual_info_file)
-    print(paste0("ID: ", ID, " - Alpage récupéré : ", alpage))
+    cat(paste0("[INFO] Alpage associé: ", alpage, "\n"))
     
-    # Retrieve the sampling period specific to the individual
-    sampling_period_ind <- get_individual_info(ID, individual_info_file, "Periode_echantillonnage")
+    sampling_period <- sampling_table$sampling_period[sampling_table$ID == ID, drop = TRUE]
+    run_parameters  <- run_parameters_list[[ID]]
     
-    # Directly use the provided folder (output_dir) to store the PDF
-    pdf_folder <- output_dir
+    res <- tryCatch(
+      hmm_fit(data[data$ID == ID, ],
+              runPar = run_parameters,
+              pdf_dir = pdf_dir,                # <-- on passe pdf_dir tel quel
+              sampling_period = sampling_period),
+      error = function(e) {
+        cat(paste0("[ERREUR] Problème détecté pour ID: ", ID, " - Message: ", e$message, "\n"))
+        flush.console()
+        NULL
+      }
+    )
     
-    # Call the hmm_fit function while passing pdf_folder
-    return(hmm_fit(data[data$ID == ID, ], run_parameters, pdf_folder, sampling_period_ind))
+    cat(paste0("[INFO] Fin du traitement pour ID: ", ID, "\n")); flush.console()
+    sink()  # stop redirection
+    return(list(result = res, log_file = log_file))  # <-- on retourne le chemin du log
   })
   
   stopCluster(clus)
-  print(Sys.time() - startTime)
-  return(results)
+  endTime <- Sys.time()
+  cat(paste0("[INFO] Exécution terminée. Durée totale : ",
+             round(difftime(endTime, startTime, units='mins'), 2), " minutes.\n"))
+  
+  # afficher puis supprimer les logs
+  for (elt in results) {
+    lf <- elt$log_file
+    if (!is.null(lf) && file.exists(lf)) {
+      cat("\n---- Logs de ", basename(lf), " ----\n", sep = "")
+      cat(paste(readLines(lf, warn = FALSE), collapse = "\n"), "\n")
+      unlink(lf, force = TRUE)  # <-- suppression
+    }
+  }
+  
+  # ne retourner que les objets HMM
+  return(lapply(results, `[[`, "result"))
 }
+
+  
 
 
 ### Fonction de fitting modifiée
@@ -450,60 +587,59 @@ par_HMM_fit <- function(data, run_parameters, ncores, individual_info_file, samp
 #   alpage_directory : a directory to save the resulting figures of this individual’s hmm fit
 # OUTPUT : the momemtuHMM object, with a $data field containing the original trajectory (or sub-trajectories), ordered by time,
 #          along with the viterbi states sequence, the state probabilities and the original ID (only the first ID is retained)
-hmm_fit <- function(data, runPar, output_dir, sampling_period) {
   
-  # Extraction of the individual's ID
-  ID = data$ID[1]
   
-  ### DATA PREPARATION
+hmm_fit <- function(data, runPar, pdf_dir, sampling_period) {  # <-- pdf_dir
+  ID <- data$ID[1]
+  cat(paste0("[INFO] Démarrage de l'ajustement du modèle HMM pour l'individu ID: ",
+             ID, " avec une période d'échantillonnage de ", sampling_period, " secondes.\n"))
+  flush.console()
+  
+  cat("[INFO] Régularisation des trajectoires en cours...\n"); flush.console()
   data_hmm <- regularise_trajectories(data, sampling_period)
+  
   if (runPar$rollavg) {
+    cat("[INFO] Application de lissage par moyenne mobile...\n"); flush.console()
     data_hmm <- rolling_averaging_trajectories(data_hmm, conv = runPar$rollavg_convolution)
   }
+  
+  cat("[INFO] Rééchantillonnage des trajectoires en cours...\n"); flush.console()
   data_hmm <- resample_trajectories(data_hmm, runPar$resampling_ratio, runPar$resampling_first_index)
+  
+  cat("[INFO] Préparation des données pour le modèle HMM...\n"); flush.console()
   data_hmm <- prepare_hmm_trajectories(data_hmm)
   
   knownStates <- rep(NA, nrow(data_hmm))
-  
-  if(runPar$knownRestingStates) {
-    # If certain periods are considered as rest, define the known states
-    knownStates[(data_hmm$hour > 3 && data_hmm$hour < 3.5) ||
-                  (data_hmm$hour > 20.5 && data_hmm$hour < 21)] <- 1
+  if ("hour" %in% colnames(data_hmm) && runPar$knownRestingStates) {
+    cat("[INFO] Identification des états de repos connus...\n"); flush.console()
+    knownStates[(data_hmm$hour > 3 & data_hmm$hour < 3.5) | (data_hmm$hour > 20.5 & data_hmm$hour < 21)] <- 1
   }
   
-  ### MODEL FITTING
-  stateNames = c("Repos", "Paturage", "Deplacement")
-  run <- fitHMM(data_hmm,
-                nbStates = 3,
-                dist = runPar$dist,
-                DM = runPar$DM,
-                Par0 = runPar$Par0,
-                estAngleMean = list(angle = TRUE),
-                fixPar = runPar$fixPar,
-                stateNames = stateNames,
-                knownStates = knownStates,
-                formula = runPar$covariants,
-                optMethod = "Nelder-Mead")
+  cat("[INFO] Ajustement du modèle HMM en cours...\n"); flush.console()
+  stateNames <- c("Repos", "Pâturage", "Déplacement")
+  run <- fitHMM(
+    data_hmm, nbStates = 3, dist = runPar$dist, DM = runPar$DM, Par0 = runPar$Par0,
+    estAngleMean = list(angle = TRUE), fixPar = runPar$fixPar, stateNames = stateNames,
+    knownStates = knownStates, formula = runPar$covariants, optMethod = "Nelder-Mead"
+  )
   
-  # Calculation of the most probable states and their probabilities
+  cat("[INFO] Modèle HMM ajusté avec succès.\n"); flush.console()
+  
+  cat("[INFO] Calcul des probabilités d'état...\n"); flush.console()
   run$data$state <- viterbi(run)
-  state_proba <- stateProbs(run)
-  run$data$state_proba <- NA
-  for (i in 1:nrow(run$data)) {
-    run$data$state_proba[i] <- state_proba[i, run$data$state[i]]
-  }
+  sp <- stateProbs(run)
+  run$data$state_proba <- sp[cbind(seq_len(nrow(sp)), run$data$state)]
   
-  # Save the PDF directly in the output_dir folder
-  pdf_file <- file.path(output_dir, paste0(ID, ".pdf"))
-  plot_results(run, pdf_file)
+  # --- PDF exactement dans pdf_dir ---
+  dir.create(pdf_dir, recursive = TRUE, showWarnings = FALSE)
+  cat(paste0("[INFO] Génération des graphiques pour ID: ", ID, "\n")); flush.console()
+  plot_results(run, file.path(pdf_dir, ID))     # <-- pas de sous-dossier ajouté
   
-  # Cleaning and reorganization of the data
   run$data <- run$data[!is.na(run$data$x), ]
   run$data <- run$data[order(run$data$time), ]
-  
-  # Restoration of the original ID
   run$data$ID <- ID
   
+  cat("[INFO] Ajustement HMM terminé pour ID: ", ID, "\n"); flush.console()
   return(run)
 }
 
@@ -513,6 +649,23 @@ hmm_fit <- function(data, runPar, output_dir, sampling_period) {
 
 
 
+# Fonction : Adapte les paramètres aux Temps d'échantillonnage
+
+get_sampling_parameters <- function(sampling_period) {
+  print(paste0("[INFO] Période d'échantillonnage définie à ", sampling_period, " minutes."))
+  
+  if (sampling_period < 10) {
+    resampling_ratio <- ceiling(10 / sampling_period)  # Ajustement à 10 min
+    param_scaling_factor <- 5  # Facteur basé sur 2 min vers 10 min
+    print("[INFO] Un rééchantillonnage est nécessaire : resampling_ratio adaptée pour 10 min")
+  } else {
+    resampling_ratio <- 1  # Pas de rééchantillonnage
+    param_scaling_factor <- sampling_period / 2  # Échelle basée sur 2 min
+    print("[INFO] Aucun rééchantillonnage nécessaire : resampling_ratio = 1")
+  }
+  
+  return(list(sampling_period = sampling_period, resampling_ratio = resampling_ratio, param_scaling_factor = param_scaling_factor))
+}
 
 
 

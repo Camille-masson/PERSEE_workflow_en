@@ -7,10 +7,10 @@ gc()
 source("config.R")
 
 ## Definition of the analysis year and the alpine pastures to process ##
-YEAR = 9999
-alpage = "Alpage_demo"
-alpages = "Alpage_demo"
-TYPE <- "catlog" #Type of input data : catlog (at 2 minute) or other (catlog/other)
+YEAR = 2013
+alpage = "Combe-Madame"
+alpages = "Combe-Madame"
+TYPE <- "other" #Type of input data : catlog (at 2 minute) or other (catlog/other)
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
@@ -59,8 +59,6 @@ if (TRUE){
   print(sampling_periods)
   
 }
-
-
 
 #### 1. Simplification in GPKG ####
 #----------------------------------#
@@ -193,111 +191,187 @@ if (TRUE) {
   # As output, a .pdf file is generated with the results of the applied filtering:
   # outputs/2. Bjorneraas_filters/Filtering_calibration_9999_Alpine_pasture_demo
   
+ 
   ## LIBRARY ##
   source(file.path(functions_dir, "Functions_filtering.R"))
   source(file.path(functions_dir, "Functions_map_plot.R"))
   source(file.path(functions_dir, "Functions_check_metadata.R"))
   
   ## INPUTS ##
-  # A folder containing the raw trajectories in CSV format from Catlog collars,
-  # stored in subfolders named after their alpine pastures
-  raw_data_dir = file.path(data_dir,paste0("Colliers_",YEAR,"_brutes"))
-  
-  # A .csv file "infos_alpages" filled in according to the demo dataset template
-  AIF <- file.path(raw_data_dir, paste0(YEAR,"_infos_alpages.csv"))
+  raw_data_dir <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"))
+  AIF <- file.path(raw_data_dir, paste0(YEAR, "_infos_alpages.csv"))
   check_and_correct_csv(csv_path = AIF)
   
-  ## OPTIONAL CHECK
-  # AIF_data <- read.csv(AIF, sep = ",", header = TRUE, row.names = NULL, check.names = FALSE, encoding = "UTF-8")
-  # str(AIF_data)
   
-  ## SORTIE ##
-  # Creation of the subfolder to store the results of the Bjorneraas filter
+  # List of parameters for the different stampling period   !!!!!!!! A voir avec mathieu !!!!!!!!!!!!!!
+  param_bank_multi <- list(
+    "1"  = list(
+      A = list(medcrit=600,  meancrit=450, spikesp=1500, spikecos=-0.95),
+      B = list(medcrit=650,  meancrit=500, spikesp=1500, spikecos=-0.95),
+      C = list(medcrit=700,  meancrit=550, spikesp=1500, spikecos=-0.95)
+    ),
+    "2"  = list(
+      A = list(medcrit=750,  meancrit=500, spikesp=1500, spikecos=-0.95),
+      B = list(medcrit=500,  meancrit=500, spikesp=1500, spikecos=-0.95),
+      C = list(medcrit=750,  meancrit=350, spikesp=1500, spikecos=-0.95)
+    ),
+    "10" = list(
+      A = list(medcrit=900,  meancrit=450, spikesp=1500, spikecos=-0.95),
+      B = list(medcrit=1000, meancrit=500, spikesp=1500, spikecos=-0.95),
+      C = list(medcrit=1100, meancrit=550, spikesp=1500, spikecos=-0.95)
+    ),
+    "15" = list(
+      A = list(medcrit=1000, meancrit=450, spikesp=1500, spikecos=-0.95),
+      B = list(medcrit=1100, meancrit=500, spikesp=1500, spikecos=-0.95),
+      C = list(medcrit=1200, meancrit=550, spikesp=1500, spikecos=-0.95)
+    ),
+    "20" = list(
+      A = list(medcrit=1100, meancrit=450, spikesp=1500, spikecos=-0.95),
+      B = list(medcrit=1200, meancrit=500, spikesp=1500, spikecos=-0.95),
+      C = list(medcrit=1300, meancrit=550, spikesp=1500, spikecos=-0.95)
+    ),
+    "30" = list(
+      A = list(medcrit=700, meancrit=450, spikesp=1500, spikecos=-0.95),
+      B = list(medcrit=1300, meancrit=500, spikesp=1500, spikecos=-0.95),
+      C = list(medcrit=800, meancrit=550, spikesp=1500, spikecos=-0.95)
+    )
+  )
+  
+  ## OUPUTS ##
   filter_output_dir <- file.path(output_dir, "2. Filtre_de_Bjorneraas")
-  if (!dir.exists(filter_output_dir)) {
-    dir.create(filter_output_dir, recursive = TRUE)
-  }
-  
-  # Output PDF file for filtering visualization
+  if (!dir.exists(filter_output_dir)) dir.create(filter_output_dir, recursive = TRUE)
   pdf(file.path(filter_output_dir, paste0("Filtering_calibration_", YEAR, "_", alpage, ".pdf")), width = 9, height = 9)
   
   
+  
   ## CODE ##
+  file_pattern <- if (TYPE == "catlog") "\\.csv$" else "\\.Rdata$"
+  read_fun     <- if (TYPE == "catlog") load_catlog_data else load_other_data_rdata
   
-  # List of raw data files for the alpine pasture
-  files <- list.files(file.path(raw_data_dir, alpage), full.names = TRUE)
-  files <- files[1:3]  # Selection of the first three files (to avoid memory overload)
-
-  # Loading and concatenation of the selected files' data
-  data <- do.call(rbind, lapply(files, function(file) { 
-    data <- load_catlog_data(file)
-    data$ID <- file  
-    return(data) 
-  }))
+  ## 1) Fichiers (échantillon de 3 max)
+  files <- list.files(file.path(raw_data_dir, alpage), pattern = file_pattern, full.names = TRUE)
+  files <- files[1:min(3, length(files))]
   
-  # Retrieval of collar installation and removal dates
-  beg_date = as.POSIXct(get_alpage_info(alpage, AIF, "date_pose"), tz="GMT", format="%d/%m/%Y %H:%M:%S")
-  end_date = as.POSIXct(get_alpage_info(alpage, AIF, "date_retrait"), tz="GMT", format="%d/%m/%Y %H:%M:%S")
-  data = date_filter(data, beg_date, end_date) 
+  ## 2) Données combinées pour histogrammes (lecture via read_fun)
+  data_list <- lapply(files, function(file) {
+    d <- read_fun(file)
+    # Harmonisation légère pour .Rdata
+    if ("long" %in% names(d) && !"lon" %in% names(d)) {
+      names(d)[names(d) == "long"] <- "lon"
+    }
+    # date POSIXct tolérante + drop NA
+    if (!inherits(d$date, "POSIXct")) d$date <- suppressWarnings(as.POSIXct(d$date, tz = "GMT"))
+    d <- d[!is.na(d$date), ]
+    d
+  })
+  data <- dplyr::bind_rows(data_list)
   
-  # Projection of the data into Lambert93 (EPSG:2154) from WGS84 (EPSG:4326)
-  data_xy <- data %>%
-    terra::vect(crs="EPSG:4326") %>%
+  ## 3) Bornage temporel via AIF (méthode d’origine)
+  beg_date <- as.POSIXct(get_alpage_info(alpage, AIF, "date_pose"),    tz="GMT", format="%d/%m/%Y %H:%M:%S")
+  end_date <- as.POSIXct(get_alpage_info(alpage, AIF, "date_retrait"), tz="GMT", format="%d/%m/%Y %H:%M:%S")
+  data <- date_filter(data, beg_date, end_date)
+  
+  ## 4) Histogrammes : ne garder que lat/lon finies AVANT terra (bornes retirées)
+  data_xy_input <- data %>%
+    dplyr::mutate(
+      lat = suppressWarnings(as.numeric(lat)),
+      lon = suppressWarnings(as.numeric(lon))
+    ) %>%
+    dplyr::filter(is.finite(lat), is.finite(lon))
+  if (nrow(data_xy_input) == 0) stop("Aucune localisation valide (lat/lon) dans l'intervalle de dates.")
+  
+  data_xy <- data_xy_input %>%
+    terra::vect(crs = "EPSG:4326") %>%
     terra::project("EPSG:2154") %>%
     as.data.frame(geom = "XY")
   
-  # Histogram of time intervals between GPS points
-  temps <- diff(data_xy$date)
-  temps <- as.numeric(temps, units = "mins")
+  temps <- diff(data_xy$date); temps <- as.numeric(temps, units = "mins")
   hist(temps, nclass = 30)
   
-  # Histogram of distances traveled between two successive positions
-  dist <- sqrt(diff(data_xy$x)^2+diff(data_xy$y)^2)
+  dist <- sqrt(diff(data_xy$x)^2 + diff(data_xy$y)^2)
   h <- hist(dist, nclass = 30, xlab='Distance (m)', xaxt="n")
   
-  ### Testing different filters
-  # Definition of test values for the Bjorneraas filter
-  medcrits = c(750, 500, 750) 
-  meancrits = c(500, 500, 350) 
-  spikesps = c(1500, 1500, 1500) 
-  spikecoss = c(-0.95, -0.95, -0.95) 
+  ## 5) Sampling periods RDS (par alpage)
+  sp_dir  <- file.path(output_dir, "0. Sampling_Periods")
+  sp_path <- file.path(sp_dir, paste0("Sampling_periods_", YEAR, "_", alpage, ".rds"))
+  sampling <- readRDS(sp_path)
   
-  for (i in 1:length(medcrits)) {
-    # Application of the Bjorneraas filter with each parameter combination
-    trajectories <- position_filter(data, medcrit=medcrits[i], meancrit=meancrits[i], spikesp=spikesps[i], spikecos=spikecoss[i])
+  ## 6) Pour chaque collier : SON pas -> appliquer les 3 combos correspondantes
+  for (file in files) {
+    collar_base <- basename(file)
+    collar_ID   <- sub("[_-].*$", "", tools::file_path_sans_ext(collar_base))
     
-    # Determination of the spatial boundaries of the map
-    minmax_xy = get_minmax_L93(trajectories[!(trajectories$R1error | trajectories$R2error ),], buffer = 100)
+    # lecture selon TYPE
+    d <- read_fun(file)
+    if ("long" %in% names(d) && !"lon" %in% names(d)) {
+      names(d)[names(d) == "long"] <- "lon"
+    }
+    if (!inherits(d$date, "POSIXct")) d$date <- suppressWarnings(as.POSIXct(d$date, tz = "GMT"))
+    d <- d[!is.na(d$date), ]
+    d <- date_filter(d, beg_date, end_date)
     
-    # Assignment of error codes for visualization
-    trajectories$errors = 1
-    trajectories$errors[trajectories$R1error] = 2
-    trajectories$errors[trajectories$R2error] = 3
+    # lat/lon uniquement finies (bornes supprimées)
+    d$lat <- suppressWarnings(as.numeric(d$lat))
+    d$lon <- suppressWarnings(as.numeric(d$lon))
+    d <- d[is.finite(d$lat) & is.finite(d$lon), ]
     
-    # Definition of the color palette for the map
-    pal <- c("#56B4E9", "red", "black")
+    # tri + ID de longueur exacte
+    d <- d[order(d$date), ]
+    d$ID <- rep(collar_ID, nrow(d))
     
-    # Display of GPS trajectories with detected errors
-    print(ggplot(trajectories, aes(x, y, col = errors)) +
-            geom_path(size = 0.2) +
-            geom_point(size = 0.3) +
-            coord_equal() +
-            xlim(minmax_xy$x_min, minmax_xy$x_max) + ylim(minmax_xy$y_min, minmax_xy$y_max) +
-            ggtitle(paste0("medcrit = ", medcrits[i], ", meancrit = ", meancrits[i], ", spikesp = ", spikesps[i], ", spikecos = ", spikecoss[i])) +
-            scale_colour_gradientn(colors=pal, guide="legend", breaks = c(1, 2, 3), labels = c("OK", "R1error", "R2error")))
+    # pas -> 3 combos
+    sp_min <- get_sp_min_from_rds(sampling, collar_ID, file)
+    combos <- param_bank_multi[[as.character(sp_min)]]
+    if (is.null(combos)) {
+      warning("Aucune banque de paramètres pour pas=", sp_min, " min (", collar_ID, ").")
+      next
+    }
     
-    # Zoom on the first five days after installation
-    trajectories <- trajectories %>%
-      filter(date < beg_date + 3600*24*5)
-    print(ggplot(trajectories, aes(x, y, col = errors)) +
-            geom_path(size = 0.2) +
-            geom_point(size = 0.3) +
-            coord_equal() +
-            ggtitle(paste0("5 days only, medcrit = ", medcrits[i], ", meancrit = ", meancrits[i], ", spikesp = ", spikesps[i], ", spikecos = ", spikecoss[i])) +
-            scale_colour_gradientn(colors=pal, guide="legend", breaks = c(1, 2, 3), labels = c("OK", "R1error", "R2error")))
+    for (lab in names(combos)) {
+      p <- combos[[lab]]
+      trajectories <- position_filter(
+        d,
+        medcrit  = p$medcrit,
+        meancrit = p$meancrit,
+        spikesp  = p$spikesp,
+        spikecos = p$spikecos
+      )
+      
+      ok <- trajectories[!(trajectories$R1error | trajectories$R2error), ]
+      minmax_xy <- get_minmax_L93(ok, buffer = 100)
+      
+      trajectories$errors <- 1
+      trajectories$errors[trajectories$R1error] <- 2
+      trajectories$errors[trajectories$R2error] <- 3
+      pal <- c("#56B4E9", "red", "black")
+      
+      print(
+        ggplot(trajectories, aes(x, y, col = errors)) +
+          geom_path(size = 0.2) +
+          geom_point(size = 0.3) +
+          coord_equal() +
+          xlim(minmax_xy$x_min, minmax_xy$x_max) +
+          ylim(minmax_xy$y_min, minmax_xy$y_max) +
+          ggtitle(paste0("[", lab, "] ", collar_ID, " | pas=", sp_min, " min | medcrit=", p$medcrit,
+                         " meancrit=", p$meancrit, " spikesp=", p$spikesp, " spikecos=", p$spikecos)) +
+          scale_colour_gradientn(colors = pal, guide = "legend",
+                                 breaks = c(1,2,3), labels = c("OK","R1error","R2error"))
+      )
+      
+      traj5 <- trajectories %>% dplyr::filter(date < beg_date + 3600*24*5)
+      print(
+        ggplot(traj5, aes(x, y, col = errors)) +
+          geom_path(size = 0.2) +
+          geom_point(size = 0.3) +
+          coord_equal() +
+          ggtitle(paste0("[ZOOM 5j] [", lab, "] ", collar_ID, " | pas=", sp_min, " min")) +
+          scale_colour_gradientn(colors = pal, guide = "legend",
+                                 breaks = c(1,2,3), labels = c("OK","R1error","R2error"))
+      )
+    }
   }
   
-  # Closing the PDF file containing the visualizations
+  # Fermer le PDF
   dev.off()
 }
 
@@ -461,15 +535,6 @@ if (TRUE) {
 
 }
 
-
-
-
-
-
-
-
-
-
 #### 3. HMM FITTING #### 
 #----------------------#
 if (TRUE) {
@@ -511,6 +576,11 @@ if (TRUE) {
   # OPTONIAL CKECK
   #str(read.csv(individual_info_file, stringsAsFactors = FALSE, encoding = "UTF-8"))
   
+  # Charger le fichier des périodes d'échantillonnage
+  sampling_period_file <- file.path(output_dir, "0. Sampling_Periods", paste0("Sampling_Periods_", YEAR, "_", alpage, ".rds"))
+  sampling_periods <- readRDS(sampling_period_file)
+  sampling_table <- readRDS(sampling_period_file)
+  
   
   ## OUTPUTS ##
   # Creation of the subfolder to store the results of the Bjorneraas filter
@@ -533,39 +603,53 @@ if (TRUE) {
   
   ## CODE ##
   
+  ### LOADING DATA FOR ANALYSES
   data = readRDS(input_rds_file)
+  data = data[data$species == "brebis",]
   
-  run_parameters = list(
-    # Model
-    model = "HMM",
-    
-    # Resampling
-    resampling_ratio = 5,
-    resampling_first_index = 0,
-    rollavg = FALSE,
-    rollavg_convolution = c(0.15, 0.7, 0.15),
-    knownRestingStates = FALSE,
-    
-    # Observation distributions (step lengths and turning angles)
-    dist = list(step = "gamma", angle = "vm"),
-    # Design matrices to be used for the probability distribution parameters of each data stream
-    DM = list(angle=list(mean = ~1, concentration = ~1)),
-    # Covariants formula
-    covariants = ~cos(hour*3.141593/12), # ~1 if no covariants used
-    
-    # 3-state HMM
-    Par0 = list(step = c(10, 25, 50, 10, 15, 40), angle = c(tan(pi/2), tan(0/2), tan(0/2), log(0.5), log(0.5), log(3))),
-    fixPar = list(angle = c(tan(pi/2), tan(0/2), tan(0/2), NA, NA, NA))
-  )
-  run_parameters = scale_step_parameters_to_resampling_ratio(run_parameters)
   
-  # Check the internet connection
-  startTime = Sys.time()
-  results = par_HMM_fit(data, run_parameters, ncores = ncores, individual_info_file, sampling_period = 120, output_dir = hmm_pdf_case)
-  endTime = Sys.time()
+  # Générer les paramètres pour chaque ID
+  sampling_parameters_list <- lapply(sampling_periods$SAMPLING, get_sampling_parameters)
+  names(sampling_parameters_list) <- sampling_periods$ID
+  
+  
+  
+  
+  # HMM FIT
+  run_parameters_list <- lapply(names(sampling_parameters_list), function(id) {
+    params <- sampling_parameters_list[[id]]
+    run_parameters <- list(
+      model = "HMM",
+      resampling_ratio = params$resampling_ratio,
+      resampling_first_index = 0,
+      rollavg = FALSE,
+      rollavg_convolution = c(0.15, 0.7, 0.15),
+      knownRestingStates = FALSE,
+      dist = list(step = "gamma", angle = "vm"),
+      DM = list(angle=list(mean = ~1, concentration = ~1)),
+      covariants = ~cos(hour*3.141593/12),
+      Par0 = list(step = c(10, 25, 50, 10, 15, 40), angle = c(tan(pi/2), tan(0/2), tan(0/2), log(0.5), log(0.5), log(3))),
+      fixPar = list(angle = c(tan(pi/2), tan(0/2), tan(0/2), NA, NA, NA))
+    )
+    
+    scale_step_parameters_to_resampling_ratio(run_parameters, alpage, params)
+  })
+  names(run_parameters_list) <- names(sampling_parameters_list)
+  
+  
+  
+  # ! Check the internet connection
+  startTime <- Sys.time()
+  results <- par_HMM_fit(data, run_parameters_list, ncores,individual_info_file, sampling_table,output_dir,pdf_dir = hmm_pdf_case)
+  endTime <- Sys.time()
+  
+  
+  
+  
    
   data_hmm <- do.call("rbind", lapply(results, function(result) result$data))
   viterbi_trajectory_to_rds(data_hmm, output_rds_file, individual_info_file)
+  
 }
 
 #### 4. FLOCK STOCKING RATE (charge) BY DAY AND BY STATE ####
@@ -798,7 +882,7 @@ if (FALSE) {
     # CODE
     
     #Indicateur : Charge total .TIF
-    if (FALSE) {
+    if (TRUE) {
       total_flock_load_tif(total_rds_prefix, output_flock_tot_tif, output_flock_tot_tif_crop, UP_file, alpage, alpage_info_file)
     }
     
@@ -818,7 +902,7 @@ if (FALSE) {
       
     }
     
-    if (TRUE){
+    if (FALSE){
       # Par quinzaine
       quinzaine_flock_load_tif_nostack(daily_rds_file = daily_rds_file,
                                        output_case_alpage = output_case_alpage,
