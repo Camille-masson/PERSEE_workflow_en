@@ -7,10 +7,10 @@ gc()
 source("config.R")
 
 ## Definition of the analysis year and the alpine pastures to process ##
-YEAR = 2013
-alpage = "Combe-Madame"
-alpages = "Combe-Madame"
-TYPE <- "other" #Type of input data : catlog (at 2 minute) or other (catlog/other)
+YEAR = 2025
+alpage = "Ponsonniere"
+alpages = "Ponsonniere"
+TYPE <- "catlog" #Type of input data : catlog (at 2 minute) or other (catlog/other)
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
@@ -25,7 +25,8 @@ ALPAGES_TOTAL <- list(
   "2021" = c("Ane-et-Buyant", "Bedina", "Pesee","Combe-Madame", "Sept-Laux"),
   "2022" = c("Ane-et-Buyant", "Bedina", "Cayolle", "Combe-Madame", "Grande-Fesse", "Jas-des-Lievres", "Lanchatra", "Pelvas","Pesee", "Sanguiniere","Sept-Laux", "Viso"),
   "2023" = c("Ane-et-Buyant", "Bedina", "Cayolle", "Crouzet", "Combe", "Combe-Madame", "Grande-Cabane", "Lanchatra", "Pesee", "Rouanette", "Sanguiniere", "Sept-Laux", "Vacherie-de-Roubion", "Viso"),
-  "2024" = c("Viso", "Cayolle", "Sanguiniere")
+  "2024" = c("Viso", "Cayolle", "Sanguiniere"),
+  "2025" = c("Viso", "Cayolle", "Sanguiniere", "Ponsonniere")
 )
 ALPAGES <- ALPAGES_TOTAL[[as.character(YEAR)]]
 
@@ -82,7 +83,7 @@ if (TRUE) {
   raw_data_dir <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"))
   
   # An .RDS file of the sampling periods starting from 0
-  sampling_period_file <- file.path(output_dir, "Sampling_Periods", paste0("Sampling_Periods_", YEAR, "_", alpage, ".rds"))
+  sampling_period_file <- file.path(output_dir, "0. Sampling_Periods", paste0("Sampling_periods_", YEAR, "_", alpage, ".rds"))
   sampling_periods <- readRDS(sampling_period_file)
   
   
