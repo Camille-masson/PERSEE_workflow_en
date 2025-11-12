@@ -53,7 +53,7 @@ total_flock_load_tif <- function(total_rds_prefix, output_flock_tot_tif, output_
 state_flock_load_tif <- function(state_rds_prefix, 
                                  output_flock_repos_tif, output_flock_deplacement_tif, output_flock_paturage_tif,
                                  output_flock_repos_tif_crop, output_flock_deplacement_tif_crop, output_flock_paturage_tif_crop,
-                                 UP_file, alpage, alpage_info_file, res_raster = 10, CROP = "YES") {
+                                 UP_file, alpage, alpage_info_file, res_raster = 10, CROP = "NO") {
   
   # Chargement des données
   charge_data <- readRDS(state_rds_prefix)
@@ -118,155 +118,6 @@ state_flock_load_tif <- function(state_rds_prefix,
   }
 }
 
-### A REVOIR ###
-library(raster)
-library(sf)
-library(dplyr)
-
-# Fonction optimisée pour traiter jour par jour (mémoire réduite)
-day_flock_load_tif <- function(daily_rds_file, output_case_alpage,
-                               UP_file, alpage, alpage_info_file, YEAR, res_raster = 10, CROP = "NO") {
-  
-  # Chargement initial léger (uniquement les jours disponibles)
-  all_days <- unique(readRDS(daily_rds_file)$day)
-  
-  raster_list <- list()
-  
-  for(day_current in all_days) {
-    
-    cat("Traitement du jour :", day_current, "\n")
-    
-    # Charger seulement les données nécessaires pour le jour courant
-    charge_data <- readRDS(daily_rds_file) %>% filter(day == day_current)
-    
-    # Vérification des colonnes nécessaires
-    if (!all(c("x", "y", "Charge") %in% names(charge_data))) {
-      stop("Les colonnes x, y ou Charge sont manquantes pour le jour :", day_current)
-    }
-    
-    # Conversion en SpatialPointsDataFrame (Lambert 93)
-    coordinates(charge_data) <- ~ x + y
-    crs(charge_data) <- CRS("+init=epsg:2154")
-    
-    # Création du raster vide (première itération)
-    if (!exists("raster_template")) {
-      raster_template <- raster(extent(charge_data), resolution = res_raster, crs = crs(charge_data))
-    }
-    
-    # Rasteriser les données du jour
-    charge_raster <- rasterize(charge_data, raster_template, field = "Charge", fun = mean, background = NA)
-    
-    # Sauvegarder temporairement chaque raster journalier en fichier intermédiaire
-    raster_temp_file <- file.path(output_case_alpage, paste0("day_", day_current, "_", YEAR, "_", alpage, ".tif"))
-    writeRaster(charge_raster, filename = raster_temp_file, format = "GTiff", overwrite = TRUE)
-    
-    raster_list[[length(raster_list) + 1]] <- charge_raster
-    
-    rm(charge_data, charge_raster)
-    gc() # Nettoyage mémoire
-  }
-  
-  # Empilement final des rasters journaliers
-  stacked_raster <- stack(raster_list)
-  stacked_output_file <- file.path(output_case_alpage, paste0("stacked_days_", YEAR, "_", alpage, ".tif"))
-  writeRaster(stacked_raster, filename = stacked_output_file, format = "GTiff", overwrite = TRUE)
-  cat("Raster journalier empilé sauvegardé avec succès :", stacked_output_file, "\n")
-  
-  # Crop optionnel selon l'UP
-  if (toupper(CROP) == "YES") {
-    UP_selected <- get_UP_shp(alpage, alpage_info_file, UP_file)
-    
-    if (nrow(UP_selected) == 0) {
-      warning("Aucune Unité Pastorale trouvée pour l'alpage spécifié. Le raster crop ne sera pas généré.")
-    } else {
-      stacked_raster_crop <- mask(crop(stacked_raster, UP_selected), UP_selected)
-      stacked_crop_output_file <- file.path(output_case_alpage, paste0("stacked_days_crop_", YEAR, "_", alpage, ".tif"))
-      writeRaster(stacked_raster_crop, filename = stacked_crop_output_file, format = "GTiff", overwrite = TRUE)
-      cat("Raster journalier découpé sauvegardé avec succès :", stacked_crop_output_file, "\n")
-    }
-  }
-}
-
-
-
-
-
-# Fonction optimisée pour traiter jour par jour (mémoire réduite)
-day_flock_load_tif_new_a_revoir <- function(daily_rds_file, output_case_alpage,
-                               UP_file, alpage, alpage_info_file, YEAR, res_raster = 10, CROP = "YES") {
-  
-  # Chargement initial léger (uniquement les jours disponibles)
-  all_days <- unique(readRDS(daily_rds_file)$day)
-  raster_list <- list()
-  raster_files_intermediaire <- c()
-  
-  for(day_current in all_days) {
-    
-    cat("Traitement du jour :", day_current, "\n")
-    
-    # Charger seulement les données nécessaires pour le jour courant
-    charge_data <- readRDS(daily_rds_file) %>% filter(day == day_current)
-    
-    # Vérification des colonnes nécessaires
-    if (!all(c("x", "y", "Charge") %in% names(charge_data))) {
-      stop("Les colonnes x, y ou Charge sont manquantes pour le jour :", day_current)
-    }
-    
-    # Conversion en SpatialPointsDataFrame (Lambert 93)
-    coordinates(charge_data) <- ~ x + y
-    crs(charge_data) <- CRS("+init=epsg:2154")
-    
-    # Création du raster vide (première itération)
-    if (!exists("raster_template")) {
-      raster_template <- raster(extent(charge_data), resolution = res_raster, crs = crs(charge_data))
-    }
-    
-    # Rasteriser les données du jour
-    charge_raster <- rasterize(charge_data, raster_template, field = "Charge", fun = mean, background = NA)
-    
-    # Sauvegarder temporairement chaque raster journalier
-    raster_temp_file <- file.path(output_case_alpage, paste0("day_", day_current, "_", YEAR, "_", alpage, ".tif"))
-    writeRaster(charge_raster, filename = raster_temp_file, format = "GTiff", overwrite = TRUE)
-    raster_files_intermediaire <- c(raster_files_intermediaire, raster_temp_file)
-    
-    raster_list[[paste0("Jour_", day_current)]] <- charge_raster
-    
-    rm(charge_data, charge_raster)
-    gc() # Nettoyage mémoire
-  }
-  
-  
-  # Empilement final des rasters journaliers
-  stacked_raster <- stack(raster_list)
-  
-  # Attribuer clairement les noms des bandes
-  names(stacked_raster) <- paste0("Jour_", all_days)
-  
-  # Export du raster empilé
-  stacked_output_file <- file.path(output_case_alpage, paste0("stacked_days_", YEAR, "_", alpage, ".tif"))
-  writeRaster(stacked_raster, filename = stacked_output_file, format = "GTiff", overwrite = TRUE)
-  cat("Raster journalier empilé sauvegardé avec succès :", stacked_output_file, "\n")
-  # Crop optionnel selon l'UP
-  if (toupper(CROP) == "YES") {
-    UP_selected <- get_UP_shp(alpage, alpage_info_file, UP_file)
-    
-    if (nrow(UP_selected) == 0) {
-      warning("Aucune Unité Pastorale trouvée pour l'alpage spécifié. Le raster crop ne sera pas généré.")
-    } else {
-      stacked_raster_crop <- mask(crop(stacked_raster, UP_selected), UP_selected)
-      stacked_crop_output_file <- file.path(output_case_alpage, paste0("stacked_days_crop_", YEAR, "_", alpage, ".tif"))
-      writeRaster(stacked_raster_crop, filename = stacked_crop_output_file, format = "GTiff", overwrite = TRUE)
-      cat("Raster journalier découpé sauvegardé avec succès :", stacked_crop_output_file, "\n")
-    }
-  }
-}
-
-
-
-### FIN DE A REVOIR ###
-
-
-# Fonction optimisée pour traiter jour par jour (mémoire réduite)
 
 day_flock_load_tif_nostack <- function(daily_rds_file, output_case_alpage,
                                UP_file, alpage, alpage_info_file, YEAR, res_raster = 10, CROP = "NO") {
@@ -304,10 +155,6 @@ day_flock_load_tif_nostack <- function(daily_rds_file, output_case_alpage,
     gc() # Nettoyage mémoire
   }
 }
-
-
-
-
 
 quinzaine_flock_load_tif_nostack <- function(daily_rds_file, output_case_alpage,
                                              UP_file, alpage, alpage_info_file,
@@ -384,6 +231,188 @@ quinzaine_flock_load_tif_nostack <- function(daily_rds_file, output_case_alpage,
 
 
 
+# Parcourt root_dir, lit total_YYYY_<alpage>.rds pour chaque dossier YYYY_<alpage>
+load_all_total_flock <- function(root_dir, alpage) {
+  stopifnot(dir.exists(root_dir), is.character(alpage), length(alpage) == 1)
+  
+  # 1) Sous-dossiers immédiats
+  subdirs <- list.dirs(root_dir, full.names = FALSE, recursive = FALSE)
+  
+  # 2) Garde uniquement ceux de la forme "YYYY_<alpage>"
+  parts <- strsplit(subdirs, "_", fixed = TRUE)
+  keep <- vapply(parts, function(p) {
+    if (length(p) < 2) return(FALSE)
+    year <- p[1]
+    rest <- paste(p[-1], collapse = "_")
+    grepl("^[0-9]{4}$", year) && identical(rest, alpage)
+  }, logical(1))
+  
+  subdirs_keep <- subdirs[keep]
+  years <- vapply(strsplit(subdirs_keep, "_", fixed = TRUE), `[[`, character(1), 1)
+  
+  if (length(years) == 0) {
+    stop("Aucun dossier 'YYYY_", alpage, "' trouvé dans : ", root_dir)
+  }
+  if (length(years) == 1) {
+    warning("Une seule année trouvée (", years, "). Médiane multi-années inutile.")
+  }
+  
+  # Trie par année (optionnel mais pratique)
+  ord <- order(as.integer(years))
+  subdirs_keep <- subdirs_keep[ord]
+  years <- years[ord]
+  
+  # 3) Lecture stricte des fichiers attendus
+  out <- setNames(vector("list", length(years)), paste0("total_", years))
+  files <- character(length(years))
+  
+  for (i in seq_along(years)) {
+    f <- file.path(root_dir, subdirs_keep[i], sprintf("total_%s_%s.rds", years[i], alpage))
+    if (!file.exists(f)) {
+      warning("Fichier manquant dans ", subdirs_keep[i], " : ", basename(f))
+      next
+    }
+    out[[i]] <- readRDS(f)
+    files[i] <- f
+  }
+  
+  ok <- !vapply(out, is.null, logical(1))
+  out <- out[ok]
+  attr(out, "files") <- setNames(files[ok], names(out))
+  attr(out, "years") <- years[ok]
+  out
+}
+
+
+
+
+# Besoins: raster, sp
+median_flock_to_tif <- function(root_dir, alpage, out_dir,
+                                           res_raster = 10,
+                                           template = c("first_year","global")) {
+  if (!requireNamespace("raster", quietly = TRUE)) stop("Installe 'raster'.")
+  if (!requireNamespace("sp", quietly = TRUE))      stop("Installe 'sp'.")
+  
+  template <- match.arg(template)
+  
+  # 1) charger toutes les années
+  res   <- load_all_total_flock (root_dir, alpage)   # <- ta fonction simple
+  years <- sort(as.integer(attr(res, "years")))
+  if (length(years) == 0) stop("Aucune année trouvée.")
+  if (length(years) == 1) stop("Une seule année (", years, "). Médiane multi-années inutile.")
+  nms   <- paste0("total_", years)
+  
+  crs_l93 <- sp::CRS("+init=epsg:2154")
+  
+  # 2) construire le *même* template que 'total_flock_load_tif'
+  if (template == "first_year") {
+    d0 <- res[[nms[1]]][, c("x","y","Charge")]
+    sp::coordinates(d0) <- ~ x + y
+    sp::proj4string(d0) <- crs_l93
+    r_template <- raster::raster(raster::extent(d0), resolution = res_raster, crs = crs_l93)
+  } else { # "global" = emprise de toutes les années (toujours sans snap)
+    xy_all <- do.call(rbind, lapply(nms, function(nm) res[[nm]][, c("x","y")]))
+    sp::coordinates(xy_all) <- ~ x + y
+    sp::proj4string(xy_all) <- crs_l93
+    r_template <- raster::raster(raster::extent(xy_all), resolution = res_raster, crs = crs_l93)
+  }
+  
+  # 3) rasteriser chaque année sur *ce même* template (identique à 'total' : fun = mean)
+  r_list <- vector("list", length(nms))
+  for (i in seq_along(nms)) {
+    d <- res[[nms[i]]][, c("x","y","Charge")]
+    sp::coordinates(d) <- ~ x + y
+    sp::proj4string(d) <- crs_l93
+    r_list[[i]] <- raster::rasterize(d, r_template, field = "Charge",
+                                     fun = mean, background = NA)
+  }
+  stk <- raster::stack(r_list)
+  
+  # 4) médiane cellulaire (NA ignorés)
+  r_med <- raster::calc(stk, fun = stats::median, na.rm = TRUE)
+  
+  # 5) écriture GeoTIFF
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+  tif_path <- file.path(out_dir, sprintf("charge_median_%d_%d_%s.tif",
+                                         years[1], years[length(years)], alpage))
+  raster::writeRaster(r_med, filename = tif_path, format = "GTiff", overwrite = TRUE)
+  message("Raster médian écrit: ", tif_path)
+  
+  invisible(list(tif = tif_path, years = years, template_used = template))
+}
+
+
+
+
+
+nb_grazing_day <- function(daily_rds_file, out_dir,
+                                  res_raster = 10,
+                                  template = c("first_year","global"),
+                                  seuil = 10) {
+  if (!requireNamespace("raster", quietly = TRUE)) stop("Installe 'raster'.")
+  if (!requireNamespace("sp", quietly = TRUE))      stop("Installe 'sp'.")
+  if (!requireNamespace("dplyr", quietly = TRUE))   stop("Installe 'dplyr'.")
+  
+  template <- match.arg(template)
+  
+  # 1) charger le quotidien (une saison/année) et calculer nb de jours pâturés par pixel
+  df <- readRDS(daily_rds_file)
+  
+  library(dplyr)
+  # agrégat quotidien par pixel (on ignore 'state')
+  df_day <- df %>%
+    dplyr::select(x, y, day, Charge) %>%
+    dplyr::group_by(x, y, day) %>%
+    dplyr::summarise(Charge = sum(Charge, na.rm = TRUE), .groups = "drop")
+  
+  # nombre de jours pâturés (> seuil) par pixel
+  jours_patures <- df_day %>%
+    dplyr::group_by(x, y) %>%
+    dplyr::summarise(nb_jours_patures = sum(Charge > seuil, na.rm = TRUE), .groups = "drop")
+  
+  # 2) construire le template (même logique que dans median_flock_to_tif)
+  crs_l93 <- sp::CRS("+init=epsg:2154")
+  
+  if (template == "first_year") {
+    d0 <- jours_patures[, c("x","y","nb_jours_patures")]
+    sp::coordinates(d0) <- ~ x + y
+    sp::proj4string(d0) <- crs_l93
+    r_template <- raster::raster(raster::extent(d0), resolution = res_raster, crs = crs_l93)
+  } else { # "global" (ici, avec un seul fichier, c'est la même emprise que first_year)
+    xy_all <- jours_patures[, c("x","y")]
+    sp::coordinates(xy_all) <- ~ x + y
+    sp::proj4string(xy_all) <- crs_l93
+    r_template <- raster::raster(raster::extent(xy_all), resolution = res_raster, crs = crs_l93)
+  }
+  
+  # 3) rasteriser (si plusieurs points tombent dans la même cellule : max)
+  d_pts <- jours_patures[, c("x","y","nb_jours_patures")]
+  sp::coordinates(d_pts) <- ~ x + y
+  sp::proj4string(d_pts) <- crs_l93
+  
+  r_nb <- raster::rasterize(d_pts, r_template, field = "nb_jours_patures",
+                            fun = max, background = NA)
+  
+  # 4) écriture GeoTIFF
+  raster::writeRaster(r_nb, output_nb_grazing_day_tif, format = "GTiff", overwrite = TRUE)
+  message("Raster 'nb_jours_patures' écrit : ", output_nb_grazing_day_tif)
+  
+  invisible(list(tif = output_nb_grazing_day_tif, seuil = seuil, template_used = template))
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 get_UP_shp <- function(alpage, alpage_info_file, UP_file) {
@@ -440,6 +469,9 @@ save_distance_denivele <- function(state_rds_file, distance_csv_file , altitude_
   
   return(distance_csv_file)
 }
+
+
+
 
 
 

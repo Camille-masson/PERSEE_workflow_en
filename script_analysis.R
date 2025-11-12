@@ -7,15 +7,16 @@ gc()
 source("config.R")
 
 # Definition of the analysis year and the alpine pastures to process
-YEAR = 9999 
-alpage = "Alpage_demo"
-alpages = "Alpage_demo"
+YEAR = 2025
+alpage = "Mantet"
+alpages = "Mantet"
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
   "2022" = c("Ane-et-Buyant", "Cayolle", "Combe-Madame", "Grande-Fesse", "Jas-des-Lievres", "Lanchatra", "Pelvas", "Sanguiniere", "Viso"),
   "2023" = c("Cayolle", "Crouzet", "Grande-Cabane", "Lanchatra", "Rouanette", "Sanguiniere", "Vacherie-de-Roubion", "Viso"),
-  "2024" = c("Viso", "Cayolle", "Sanguiniere")
+  "2024" = c("Viso", "Cayolle", "Sanguiniere"),
+  "2025" = c("Viso", "Cayolle", "Sanguiniere", "Ponsonniere", "Mantet")
 )
 ALPAGES <- ALPAGES_TOTAL[[as.character(YEAR)]]
 
@@ -211,7 +212,6 @@ if (TRUE) {
   #   outputs/2. Bjorneraas_filters/Catlog_9999_filtered_alpage_demo.rds
   # - .csv file containing collar performance:
   #   outputs/2. Bjorneraas_filters/9999_filtering_alpages.csv
-  
   
   
   ## LIBRARY ##
@@ -525,7 +525,10 @@ if (TRUE){
     rm(charge_tot)
     
     rm(charge)
-  }
+    
+    
+    
+    }
 
 
 
@@ -547,7 +550,7 @@ if (TRUE){
 
 #### 5. Extraction des raster CHARGEMENT ####
 #-------------------------------------------#
-if (FALSE) {
+if (TRUE) {
   # Exctraction des raster au format tif 
   # Génération de différent tif : 
   # - Chargement total
@@ -618,31 +621,33 @@ if (FALSE) {
     output_flock_tot_tif = file.path(output_case_alpage, paste0("total_",YEAR,"_",alpage,".tif"))
     output_flock_tot_tif_crop = file.path(output_case_alpage, paste0("total_",YEAR,"_",alpage,"_crop.tif"))
     
+    # Un .tif par alpage avec le chargement median de toute les années disponible.
+    output_flock_med_tif = file.path(output_case_alpage, paste0("total_med_",alpage,".tif"))
     
     # CODE
     
     #Indicateur : Charge total .TIF
-    if (FALSE) {
+    if (T) {
       total_flock_load_tif(total_rds_prefix, output_flock_tot_tif, output_flock_tot_tif_crop, UP_file, alpage, alpage_info_file)
     }
     
     
     #Indicateur : Charge_by_state
-    if (FALSE) {
+    if (T) {
       state_flock_load_tif(state_rds_prefix,output_flock_repos_tif,output_flock_deplacement_tif, output_flock_paturage_tif,
                            output_flock_repos_tif_crop, output_flock_deplacement_tif_crop , output_flock_paturage_tif_crop,
-                           UP_file, alpage, alpage_info_file)
+                           UP_file, alpage, alpage_info_file, CROP = "NO")
     }
     
     #Indicateur : Charge_by_day
-    if (FALSE){
+    if (F){
       res_raster <- 10 # ou la valeur que tu souhaites explicitement
-      day_flock_load_tif_nostack(daily_rds_prefix, output_case_alpage, UP_file, alpage, alpage_info_file, YEAR, res_raster, CROP = "YES")
+      day_flock_load_tif_nostack(daily_rds_prefix, output_case_alpage, UP_file, alpage, alpage_info_file, YEAR, res_raster, CROP = "NO")
       
       
     }
     
-    if (TRUE){
+    if (FALSE){
       # Par quinzaine
       quinzaine_flock_load_tif_nostack(daily_rds_file = daily_rds_file,
                                        output_case_alpage = output_case_alpage,
@@ -652,11 +657,86 @@ if (FALSE) {
                                        YEAR = YEAR,
                                        res_raster = 10,
                                        CROP = "NO")
+      
+      
+    if (F){
+      
+      
+      res <- charge_median(case_flock_file, alpage)
+      
+      
+      median_flock_to_tif(case_flock_file, alpage, output_case_alpage)
+      
+    }
+      
+      
+      
     }
     
   }
   
 }
+  
+
+#### 6. Calcul du nombre de jour paturé ####
+#-------------------------------------------#
+if (TRUE) {
+  
+  source(file.path(functions_dir, "Functions_Indicateurs.R"))
+  
+  
+  # ENTREE
+  #Dossier contenant les sous dossier des chargement
+  case_flock_file = file.path(output_dir, "4. Chargements_Calcules")
+  #Dossier contenant les fichiers du tot de chargement
+  case_flock_alpage_file = file.path(case_flock_file,paste0(YEAR,"_",alpage))
+  
+  # Un .RDS par alpage contenant les charges journalières
+  daily_rds_file = file.path(case_flock_alpage_file, paste0("by_day_and_state_",YEAR,"_",alpage,".rds"))
+  
+  # OUTPUT
+  
+  #Création du dossier de sortie des indicateur pour la visualistaion
+  output_visu_case <- file.path(output_dir, "5. Indicateurs_visualisation")
+  if (!dir.exists(output_visu_case)) {
+    dir.create(output_visu_case, recursive = TRUE)
+  }
+  #Création du sous-dossier Indicateur traitée : Chargement
+  output_day_grazing_case <- file.path(output_visu_case, "Number_Grazing_day")
+  if (!dir.exists(output_day_grazing_case)) {
+    dir.create(output_day_grazing_case, recursive = TRUE)
+  }
+  #Création du sous-sous-dossier alpage et années traitée : Chargement
+  output_case_alpage <- file.path(output_day_grazing_case, paste0(YEAR,"_",alpage))
+  if (!dir.exists(output_case_alpage)) {
+    dir.create(output_case_alpage, recursive = TRUE)
+  }
+  
+  # Un .TIF par alpage contenant les charges journalières
+  output_nb_grazing_day_tif = file.path(output_case_alpage, paste0("number_grazing_day_",YEAR,"_",alpage,".tif"))
+  
+  
+  ## CODE
+  
+  nb_grazing_day(daily_rds_file, output_nb_grazing_day_tif)
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+}
+  
+  
+  
+  
+  
+  
+####
 
 #### 6. Calcul de la distance et du denivelé ####
 #-----------------------------------------------#
@@ -711,7 +791,7 @@ if (FALSE) {
 
 #### 7. Calcul date de pature ####
 #--------------------------------#
-if (FALSE) {
+if (TRUE) {
   # Calcul de la date de mise en pature de chaque espace pixel par pixel lorsque
   # le chargement dépasse un seuil de paturage on concidère la mise en pature du
   # pixel ainsi le jour julien et noté pour chaque pixel 
@@ -771,76 +851,11 @@ if (FALSE) {
   
   
   
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  count_nb_grazing_days <- function(daily_rds_prefix,
-                                    output_nb_grazing_rds,
-                                    output_nb_grazing_tif,
-                                    threshold = 10) {
-    # Chargement des librairies nécessaires
-    library(dplyr)
-    library(raster)
-    threshold = 1
-    # Lecture des données journalières
-    daily_data <- readRDS(daily_rds_prefix)
-    
-    # Vérification de la présence des colonnes nécessaires
-    required_cols <- c("x", "y", "day", "Charge", "state")
-    if (!all(required_cols %in% names(daily_data))) {
-      stop("Les colonnes x, y, day, Charge ou state sont manquantes dans les données.")
-    }
-    
-    # 1) Filtrer pour ne garder que l'état 'Paturage'
-    # 2) Agréger par pixel et jour pour obtenir la somme de Charge du jour
-    # 3) Créer un flag (1/0) si la Charge dépasse le threshold
-    grazing_data <- daily_data %>%
-      filter(state == "Paturage") %>%
-      group_by(x, y, day) %>%
-      summarize(Charge_day = sum(Charge, na.rm = TRUE), .groups = "drop") %>%
-      mutate(grazing_flag = if_else(Charge_day >= threshold, 1, 0))
-    
-    # 4) Calcul du nombre total de jours paturés par pixel
-    nb_grazing_data <- grazing_data %>%
-      group_by(x, y) %>%
-      summarize(nb_grazing_day = sum(grazing_flag), .groups = "drop")
-    
-    # Sauvegarde du résultat au format RDS
-    saveRDS(nb_grazing_data, file = output_nb_grazing_rds)
-    cat("Fichier RDS créé avec 'nb_grazing_day' :", output_nb_grazing_rds, "\n")
-    
-    # Conversion en data.frame si nécessaire
-    nb_grazing_data_df <- as.data.frame(nb_grazing_data)
-    
-    # 5) Création du raster : 1ère col = x, 2ème = y, 3ème = nb_grazing_day
-    rast <- rasterFromXYZ(nb_grazing_data_df, crs = CRS("+init=epsg:2154"))
-    
-    # 6) Export du raster
-    writeRaster(rast, filename = output_nb_grazing_tif, format = "GTiff", overwrite = TRUE)
-    cat("Raster sauvegardé avec succès :", output_nb_grazing_tif, "\n")
-    gc()
-    return(nb_grazing_data)
-  }
-  
-  
-  
-  
 }
 
 #### 8. Vecteur du comportement ####
 #----------------------------------#  
-if (FALSE){
+if (TRUE){
   #Library
   source(file.path(functions_dir, "Functions_Indicateurs.R"))
   library(sf)
@@ -887,7 +902,7 @@ if (FALSE){
     }
     
     if (TYPE == "catlog"){
-      generate_trajectory_gpkg_catlog(state_rds_file,output_state_traj_case,YEAR,alpage,sampling_interval = 20)#Point toute les 30 minutes (reglé de base a 10)
+      generate_trajectory_gpkg_catlog(state_rds_file,output_state_traj_case,YEAR,alpage,sampling_interval = 60)#Point toute les 30 minutes (reglé de base a 10)
     }
     
   }
