@@ -8,15 +8,15 @@ source("config.R")
 
 # Definition of the analysis year and the alpine pastures to process
 YEAR = 2025
-alpage = "Mantet"
-alpages = "Mantet"
+alpage = "Viso"
+alpages = "Viso"
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
   "2022" = c("Ane-et-Buyant", "Cayolle", "Combe-Madame", "Grande-Fesse", "Jas-des-Lievres", "Lanchatra", "Pelvas", "Sanguiniere", "Viso"),
   "2023" = c("Cayolle", "Crouzet", "Grande-Cabane", "Lanchatra", "Rouanette", "Sanguiniere", "Vacherie-de-Roubion", "Viso"),
-  "2024" = c("Viso", "Cayolle", "Sanguiniere"),
-  "2025" = c("Viso", "Cayolle", "Sanguiniere", "Ponsonniere", "Mantet")
+  "2024" = c("Viso", "Cayolle", "Sanguiniere","Crouzet","Grande-Cabane"),
+  "2025" = c("Viso", "Cayolle", "Sanguiniere", "Ponsonniere", "Mantet","Sanguiniere","Grande-Cabane")
 )
 ALPAGES <- ALPAGES_TOTAL[[as.character(YEAR)]]
 
@@ -457,7 +457,7 @@ if (TRUE){
   
   
   ## CODE ##
-  h <- 25 # Characteristic distance for calculating stocking
+  h <- 10 # Characteristic distance for calculating stocking
 
   for (alpage in alpages) {
     flock_sizes <- get_flock_size_through_time(alpage, flock_size_file)
@@ -676,7 +676,6 @@ if (TRUE) {
   }
   
 }
-  
 
 #### 6. Calcul du nombre de jour paturé ####
 #-------------------------------------------#
@@ -707,7 +706,7 @@ if (TRUE) {
     dir.create(output_day_grazing_case, recursive = TRUE)
   }
   #Création du sous-sous-dossier alpage et années traitée : Chargement
-  output_case_alpage <- file.path(output_day_grazing_case, paste0(YEAR,"_",alpage))
+  output_case_alpage <- file.path(output_day_grazing_case, paste0(alpage))
   if (!dir.exists(output_case_alpage)) {
     dir.create(output_case_alpage, recursive = TRUE)
   }
@@ -721,26 +720,56 @@ if (TRUE) {
   nb_grazing_day(daily_rds_file, output_nb_grazing_day_tif)
   
   
-  
-  
-  
-  
-  
-  
-  
-  
-}
-  
-  
-  
-  
-  
-  
-####
+  }
+
+#### 7. Calcul du jour du pic de chargement ####
+#-------------------------------------------#
+if (TRUE) {
+    
+    source(file.path(functions_dir, "Functions_Indicateurs.R"))
+    
+    
+    # ENTREE
+    #Dossier contenant les sous dossier des chargement
+    case_flock_file = file.path(output_dir, "4. Chargements_Calcules")
+    #Dossier contenant les fichiers du tot de chargement
+    case_flock_alpage_file = file.path(case_flock_file,paste0(YEAR,"_",alpage))
+    
+    # Un .RDS par alpage contenant les charges journalières
+    daily_rds_file = file.path(case_flock_alpage_file, paste0("by_day_and_state_",YEAR,"_",alpage,".rds"))
+    
+    # OUTPUT
+    
+    #Création du dossier de sortie des indicateur pour la visualistaion
+    output_visu_case <- file.path(output_dir, "5. Indicateurs_visualisation")
+    if (!dir.exists(output_visu_case)) {
+      dir.create(output_visu_case, recursive = TRUE)
+    }
+    #Création du sous-dossier Indicateur traitée : Chargement
+    output_day_grazing_case <- file.path(output_visu_case, "Date_of_stocking_rate_peak")
+    if (!dir.exists(output_day_grazing_case)) {
+      dir.create(output_day_grazing_case, recursive = TRUE)
+    }
+    #Création du sous-sous-dossier alpage et années traitée : Chargement
+    output_case_alpage <- file.path(output_day_grazing_case, paste0(alpage))
+    if (!dir.exists(output_case_alpage)) {
+      dir.create(output_case_alpage, recursive = TRUE)
+    }
+    
+    # Un .TIF par alpage contenant les charges journalières
+    date_of_stocking_rate_peak_tif = file.path(output_case_alpage, paste0("date_of_stocking_rate_peak_",YEAR,"_",alpage,".tif"))
+    
+    
+    ## CODE
+    
+    date_of_stocking_rate_peak(daily_rds_file,date_of_stocking_rate_peak_tif)
+    
+    
+  }
 
 #### 6. Calcul de la distance et du denivelé ####
 #-----------------------------------------------#
-if (FALSE) {
+if (TRUE) {
   # Calcul de la distance et du denivelé par jour sur l'ensemble des colliers
   # Le tout stocké par alpage et par année souys forme d'un csv
   # Attention il faut le MNT
@@ -761,8 +790,10 @@ if (FALSE) {
     # Un .RDS contenant les trajectoires (filtrées, éventuellement sous-échantillonnées)
     state_rds_file = file.path(case_state_file, paste0("Catlog_",YEAR,"_",alpage, "_viterbi.rds"))
     
-    # Un raster d’altitude
-    altitude_raster = file.path(raster_dir,"BDALTI.tif")
+    #dtm
+    dtm_case <- file.path(raster_dir, "dtm")
+    if (!dir.exists(dtm_case)) dir.create(dtm_case, recursive = TRUE)
+    mnt_file <- file.path(dtm_case, paste0("DTM_1_", alpage, ".tif"))
     
     
     # SORTIE 
@@ -782,7 +813,14 @@ if (FALSE) {
     
     #CODE 
     
-    save_distance_denivele(state_rds_file, distance_csv_file , altitude_raster, output_distance_case, YEAR, alpage)
+    save_distance_denivele(
+      state_rds_file,
+      distance_csv_file,
+      mnt_file,              # chemin du raster
+      output_distance_case,
+      YEAR,
+      alpage
+    )
     
   }
   
@@ -902,7 +940,7 @@ if (TRUE){
     }
     
     if (TYPE == "catlog"){
-      generate_trajectory_gpkg_catlog(state_rds_file,output_state_traj_case,YEAR,alpage,sampling_interval = 60)#Point toute les 30 minutes (reglé de base a 10)
+      generate_trajectory_gpkg_catlog(state_rds_file,output_state_traj_case,YEAR,alpage,sampling_interval = 20)#Point toute les 30 minutes (reglé de base a 10)
     }
     
   }
@@ -933,7 +971,7 @@ if (TRUE){
     # Un dossier contenant les ratsers des Unités Pastorales (UP)
     case_UP_file = file.path(raster_dir, "UP")
     # Un .SHP avec les Unités pastorales UP
-    UP_file = file.path(case_UP_file, "v1_bd_shape_up_inra_2012_2014_2154_all_emprise.shp")
+    UP_file = file.path(case_UP_file, paste0("UP_",alpage,".shp"))
     
     # Un dossier contenant les Infos sur les alpages
     raw_data_dir = file.path(data_dir,paste0("Colliers_",YEAR,"_brutes"))
@@ -954,6 +992,7 @@ if (TRUE){
     
     # Un .shp contenant les données de trajectoires catégorisées par comportement et collier
     output_polygon_use_shp = file.path(output_polygon_case, paste0("Use_polygon_",YEAR,"_",alpage,".shp"))
+    output_polygon_use_month_shp = file.path(output_polygon_case, paste0("Use_polygon_month_",YEAR,"_",alpage,".shp"))
     
     
     # CODE 
@@ -965,14 +1004,14 @@ if (TRUE){
     }
     
     if(TRUE){
-      generate_presence_polygons_by_percentage(state_rds_file, output_polygon_use_shp, YEAR, alpage, percentage = 0.85 ,n_grid = 200,small_poly_threshold_percent = 0.05 ,crs = 2154 )
+      generate_presence_polygons_by_percentage(state_rds_file, output_polygon_use_shp, YEAR, alpage, percentage = 0.85, n_grid = 200,small_poly_threshold_percent = 0.05 ,crs = 2154 )
       
       
     }
     
     
     if (TRUE){
-      generate_presence_polygons_by_percentage_per_month(state_rds_file, output_polygon_use_shp, YEAR, alpage, percentage = 0.85 ,n_grid = 200,small_poly_threshold_percent = 0.05 ,crs = 2154 )  
+      generate_presence_polygons_by_percentage_per_month(state_rds_file, output_polygon_use_month_shp, YEAR, alpage, percentage = 0.85 ,n_grid = 200,small_poly_threshold_percent = 0.05 ,crs = 2154 )  
     } 
     
     

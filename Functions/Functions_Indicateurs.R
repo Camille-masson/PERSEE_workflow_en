@@ -348,7 +348,7 @@ median_flock_to_tif <- function(root_dir, alpage, out_dir,
 nb_grazing_day <- function(daily_rds_file, out_dir,
                                   res_raster = 10,
                                   template = c("first_year","global"),
-                                  seuil = 10) {
+                                  seuil = 5) {
   if (!requireNamespace("raster", quietly = TRUE)) stop("Installe 'raster'.")
   if (!requireNamespace("sp", quietly = TRUE))      stop("Installe 'sp'.")
   if (!requireNamespace("dplyr", quietly = TRUE))   stop("Installe 'dplyr'.")
@@ -405,7 +405,114 @@ nb_grazing_day <- function(daily_rds_file, out_dir,
 
 
 
-
+date_of_stocking_rate_peak <- function(daily_rds_file,
+                                        output_tif,
+                                        res_raster = 10,
+                                        template = c("first_year", "global")) {
+  
+  if (!requireNamespace("raster", quietly = TRUE)) stop("Installe 'raster'.")
+  if (!requireNamespace("sp", quietly = TRUE))      stop("Installe 'sp'.")
+  if (!requireNamespace("dplyr", quietly = TRUE))   stop("Installe 'dplyr'.")
+  
+  template <- match.arg(template)
+  
+  # 1) Charger le .rds
+  df <- readRDS(daily_rds_file)
+  
+  if (!all(c("x", "y", "day", "Charge") %in% names(df))) {
+    stop("Le RDS doit contenir au moins les colonnes : x, y, day, Charge.")
+  }
+  
+  library(dplyr)
+  
+  # 2) Agrégat quotidien par pixel (on ignore 'state')
+  df_day <- df %>%
+    dplyr::select(x, y, day, Charge) %>%
+    dplyr::group_by(x, y, day) %>%
+    dplyr::summarise(Charge = sum(Charge, na.rm = TRUE), .groups = "drop")
+  
+  if (nrow(df_day) == 0) {
+    stop("Aucune donnée dans le fichier : ", daily_rds_file)
+  }
+  
+  # 3) Passer en DOY
+  #    - si 'day' est un objet Date -> DOY via %j
+  #    - sinon on suppose que 'day' est déjà un DOY (entier)
+  if (inherits(df_day$day, "Date")) {
+    df_day <- df_day %>%
+      dplyr::mutate(doy = as.integer(format(day, "%j")))
+  } else {
+    df_day <- df_day %>%
+      dplyr::mutate(doy = as.integer(day))
+  }
+  
+  # 4) Jour du pic de chargement par pixel
+  #    - on garde uniquement les pixels avec un max(Charge) > 0
+  #    - si plusieurs jours ex aequo au max, on prend le DOY le plus petit
+  df_peak <- df_day %>%
+    dplyr::filter(!is.na(Charge)) %>%
+    dplyr::group_by(x, y) %>%
+    dplyr::summarise(
+      max_charge = max(Charge, na.rm = TRUE),
+      doy_peak = {
+        m <- max(Charge, na.rm = TRUE)
+        if (!is.finite(m) || m <= 0) {
+          NA_integer_  # pixel jamais chargé -> NA
+        } else {
+          doy_cand <- doy[Charge == m]
+          as.integer(min(doy_cand, na.rm = TRUE))  # plus petit DOY en cas d'ex æquo
+        }
+      },
+      .groups = "drop"
+    ) %>%
+    dplyr::filter(max_charge > 0, !is.na(doy_peak)) %>%
+    dplyr::select(x, y, doy_peak)
+  
+  # 5) Construire le raster template (même logique que nb_grazing_day)
+  crs_l93 <- sp::CRS("+init=epsg:2154")
+  
+  if (template == "first_year") {
+    d0 <- unique(df_day[, c("x", "y")])
+    sp::coordinates(d0) <- ~ x + y
+    sp::proj4string(d0) <- crs_l93
+    r_template <- raster::raster(raster::extent(d0),
+                                 resolution = res_raster,
+                                 crs = crs_l93)
+  } else { # "global" (avec un seul fichier, c'est la même emprise)
+    xy_all <- unique(df_day[, c("x", "y")])
+    sp::coordinates(xy_all) <- ~ x + y
+    sp::proj4string(xy_all) <- crs_l93
+    r_template <- raster::raster(raster::extent(xy_all),
+                                 resolution = res_raster,
+                                 crs = crs_l93)
+  }
+  
+  # 6) Rasteriser le DOY du pic
+  if (nrow(df_peak) > 0) {
+    d_pts <- df_peak
+    sp::coordinates(d_pts) <- ~ x + y
+    sp::proj4string(d_pts) <- crs_l93
+    
+    r_doy <- raster::rasterize(d_pts, r_template,
+                               field = "doy_peak",
+                               fun = max,  # sans effet si 1 point / pixel
+                               background = NA)
+  } else {
+    # aucun pixel chargé : raster rempli de NA
+    r_doy <- r_template
+    raster::values(r_doy) <- NA
+    warning("Aucun pixel avec Charge > 0 : raster rempli de NA.")
+  }
+  
+  # 7) Écriture GeoTIFF
+  raster::writeRaster(r_doy, output_tif,
+                      format = "GTiff", overwrite = TRUE)
+  message("Raster 'date_of_stocking_rate_peak' écrit : ", output_tif)
+  
+  invisible(list(tif = output_tif,
+                 template_used = template,
+                 res = res_raster))
+}
 
 
 
@@ -428,45 +535,63 @@ get_UP_shp <- function(alpage, alpage_info_file, UP_file) {
 }
 
 
-
-#Calcul de la distance et du dénivelé
-
-save_distance_denivele <- function(state_rds_file, distance_csv_file , altitude_raster, output_distance_case, YEAR, alpage) {
-  # Charger les données
+save_distance_denivele <- function(state_rds_file,
+                                   distance_csv_file,
+                                   altitude_raster_path,
+                                   output_distance_case,
+                                   YEAR,
+                                   alpage) {
+  # 1. Charger les données
   data <- readRDS(state_rds_file) %>%
     dplyr::select(ID, time, x, y)
   
-  # Charger l'altitude en fonction des coordonnées
-  altitude <- get_raster_cropped_L93(altitude_raster, get_minmax_L93(data, 20), reproject = FALSE, as = "spatRast")
+  # 2. Charger le raster d'altitude (DTM complet)
+  r_alt <- terra::rast(altitude_raster_path)
+  # On suppose que r_alt et (x, y) sont déjà en L93 (EPSG:2154)
   
-  # Préparer les données pour obtenir les longueurs de pas
-  data <- prepData(data, type = "UTM", covNames = NULL)
+  # 3. Préparation des données (moveHMM)
+  data <- moveHMM::prepData(
+    trackData  = data,
+    type       = "UTM",
+    coordNames = c("x", "y")
+  )
   
-  # Extraire l'altitude
-  data$altitude <- terra::extract(altitude, vect(as.matrix(data[c("x", "y")]), type="points", crs=CRS_L93), ID = FALSE)$BDALTI
+  # 4. Extraction de l'altitude aux points
+  pts <- terra::vect(
+    as.matrix(data[c("x", "y")]),
+    type = "points",
+    crs  = CRS_L93
+  )
   
-  # Calcul du dénivelé
+  alt_vals <- terra::extract(r_alt, pts, ID = FALSE)
+  data$altitude <- alt_vals[[1]]   # première (et seule) couche du DTM
+  
+  # 5. Dénivelé & jour
   data$denivelation <- append(0, pmax(diff(data$altitude), 0))
-  data$day <- yday(data$time)
+  data$day <- lubridate::yday(data$time)
   
-  # Fonction pour ignorer le premier élément de chaque groupe
   sum_without_first <- function(v) {
-    return (sum(v[2:length(v)], na.rm = TRUE))
+    if (length(v) <= 1) return(0)
+    sum(v[-1], na.rm = TRUE)
   }
   
-  # Calcul de la distance et du dénivelé moyen par jour
-  data <- data %>% group_by(ID, day) %>%
-    summarise(date = first(as.Date(time)), 
-              distance = sum_without_first(step), 
-              denivelation = sum_without_first(denivelation)) %>%
-    group_by(date) %>%
-    summarise(distance = mean(distance, na.rm = TRUE), 
-              denivelation = mean(denivelation, na.rm = TRUE))
+  # 6. Distance et dénivelé moyen par jour
+  data <- data %>%
+    dplyr::group_by(ID, day) %>%
+    dplyr::summarise(
+      date         = dplyr::first(as.Date(time)),
+      distance     = sum_without_first(step),
+      denivelation = sum_without_first(denivelation),
+      .groups      = "drop"
+    ) %>%
+    dplyr::group_by(date) %>%
+    dplyr::summarise(
+      distance     = mean(distance, na.rm = TRUE),
+      denivelation = mean(denivelation, na.rm = TRUE),
+      .groups      = "drop"
+    )
   
-  
-  # Sauvegarde des données en CSV
   write.csv(data, distance_csv_file, row.names = FALSE)
-  
   return(distance_csv_file)
 }
 
