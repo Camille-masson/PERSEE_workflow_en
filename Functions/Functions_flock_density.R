@@ -299,9 +299,8 @@ recompute_daily_flock_load_by_state <- function(charge_d, flock_size_d, prop_tim
 }
 
 
-
 #FONCTION V1 avec les memes fonctionnalisté que l'original basé sur NDVI grid
-flock_load_by_day_and_state_to_rds_kernelbb_NDVI_grid <- function(data, grid, save_dir, save_rds_name, flock_sizes, prop_time_collar_on) {
+flock_load_by_day_and_state_to_rds_kernelbb_grid <- function(data, grid, save_dir, save_rds_name, flock_sizes, prop_time_collar_on) {
   library(lubridate)
   library(tidyverse)
   library(adehabitatHR)
@@ -356,43 +355,38 @@ flock_load_by_day_and_state_to_rds_kernelbb_NDVI_grid <- function(data, grid, sa
 }
 
 
-
-flock_merge_rds_files <- function(save_dir, state_daily_rds_prefix) {
-  # Lister tous les fichiers RDS générés
-  all_files <- list.files(save_dir, pattern = paste0("^", state_daily_rds_prefix), full.names = TRUE)
+flock_merge_rds_files <- function(save_dir, state_daily_rds_prefix, alpage) {
   
-  # Vérifier s'il y a des fichiers à fusionner
-  if (length(all_files) == 0) {
-    return(NULL)
-  }
+  # Ne prendre QUE les fichiers journaliers: prefix + état + _jour.rds
+  all_files <- list.files(
+    save_dir,
+    pattern = paste0("^", state_daily_rds_prefix, "_?(Repos|Paturage|Deplacement)_\\d+\\.rds$"),
+    full.names = TRUE
+  )
   
-  # Charger tous les fichiers RDS
+  if (length(all_files) == 0) return(NULL)
+  
   rds_list <- lapply(all_files, function(file) {
     data <- readRDS(file)
     
-    # Vérification : Si la colonne state est manquante ou mal définie, on la rajoute
     if (!"state" %in% colnames(data)) {
-      state_detected <- stringr::str_extract(basename(file), "_(Repos|Paturage|Deplacement)_")
-      state_detected <- gsub("_", "", state_detected)  # Nettoyage du nom
+      state_detected <- stringr::str_extract(basename(file), "(Repos|Paturage|Deplacement)")
       data$state <- state_detected
     }
     
-    return(data)
+    data
   })
   
-  # Fusionner tous les fichiers en une seule data.frame
   charge_final <- data.table::rbindlist(rds_list, use.names = TRUE, fill = TRUE)
   
-  # Sauvegarde du fichier final
   output_file <- file.path(save_dir, paste0(state_daily_rds_prefix, alpage, ".rds"))
   saveRDS(charge_final, output_file)
   
-  # Suppression des fichiers intermédiaires
-  file.remove(all_files)
+  # Sécurité: ne supprimer que si le final existe bien
+  if (file.exists(output_file)) file.remove(all_files)
   
-  return(output_file)
+  output_file
 }
-
 
 
 

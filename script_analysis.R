@@ -7,9 +7,9 @@ gc()
 source("config.R")
 
 # Definition of the analysis year and the alpine pastures to process
-YEAR = 2025
-alpage = "Viso"
-alpages = "Viso"
+YEAR = 2024
+alpage = "Cayolle"
+alpages = "Cayolle"
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
@@ -294,7 +294,325 @@ if (TRUE) {
   }
 }
 
-#### 3. HMM FITTING #### 
+#### 3. Night parc identification ####
+#------------------------------------#
+if (TRUE){
+  ## Description ----
+  # This part is a new approach to identify for each day the night park. This 
+  # approach is a proxy of the different grazing sector of the summer pasture
+  # And because the night park is a structuralist element of the grazing plan.
+  
+  # Method:
+  # - Filter fixes to retain night locations in parks (19:30–04:30 UTC).
+  # - Cluster night locations with DBSCAN (eps = 100 m; minPts = 80).
+  # - For each cluster, compute a KDE home range (hr_kde) and extract the 95% isopleth
+  #   to delineate each night park.
+  # - Merge night parks whose centroids are within 500 m (same park ID / same treatment).
+  # - Assign one park per animal per day:
+  #     * For each ID × day, identify the dominant park during the first 30 minutes
+  #       and the last 30 minutes of the night track.
+  #     * If start-park == end-park, assign that park to the day.
+  #     * If different, label the day as "transition_day".
+  #   (Spatial assignment done with st_join / st_within.)
+  # - Parks that occur only on transition days are labelled "transition_park".
+  
+  
+  # Data :
+  # - INPUT : GPS point filtered by Bjorneras ("Catlog_",YEAR,"_filtered_",alpages,".rds")
+  # - OUTPUT : a .RDS with the point and a new column park (park_1, park_2, park_3, ...)
+  
+  ## FUNCTION & PACKAGE ----
+  library(dplyr)
+  library(lubridate)
+  library(amt)
+  library(dbscan)
+  
+  ## INPUT ----
+  # Filter case (part2.2)
+  filter_case <- file.path(output_dir, "2. Filtre_de_Bjorneraas")
+  if (!dir.exists(filter_case)) {dir.create(filter_case, recursive = TRUE)}
+  
+  # An .RDS file containing the filtered trajectories
+  input_rds_file = file.path(filter_case, paste0("Catlog_",YEAR,"_filtered_",alpage,".rds"))
+  
+  # A case with Pastoral unite shapefile (UP)
+  case_UP_file = file.path(raster_dir, "UP")
+  # Un .SHP avec les Unités pastorales UP
+  UP_file = file.path(case_UP_file, paste0("UP_",alpage,".shp"))
+  
+  ## OUTPUT ----
+  nightpark_output_dir <- file.path(output_dir, "3. Night_park")
+  if (!dir.exists(nightpark_output_dir)) {dir.create(nightpark_output_dir, recursive = TRUE)}
+  
+  # An .RDS file containing the filtered trajectories
+  output_rds_file = file.path(nightpark_output_dir, paste0("Catlog_",YEAR,"_night_park_",alpage,".rds"))
+  
+  output_shp_file = file.path(nightpark_output_dir, paste0("Night_park_",alpage,"_",YEAR,".shp"))
+  
+  ref_file <- file.path(nightpark_output_dir, paste0("NightPark_ref_", alpage, ".rds"))
+  
+  # rast of the template 
+  template_case = file.path(raster_dir, "template")
+  if(!dir.exists(template_case)) {dir.create(template_case, recursive = TRUE)}
+  output_rast_file = file.path(template_case, paste0("template_",alpage,".tif"))
+  
+  ## CODE ----
+  
+  # read input dataset
+  d <- readRDS(input_rds_file)
+  
+  d_night <- d %>%
+    mutate(hm = hour(time) + minute(time)/60) %>% 
+    filter(hm >= 19.5 | hm < 4.5) %>%
+    dplyr::select(-c(hm,species,race, lat, lon))
+  
+  
+  d_night_vect <- st_as_sf(d_night, coords = c("x","y"), crs = 2154)
+  
+  # 2) Clustering global (amas = parcs)
+  eps_m  <- 100  # ajuste 30-80
+  minPts <- 80   # ajuste 10-80
+  
+  cl <- dbscan(st_coordinates(d_night_vect), eps = eps_m, minPts = minPts)
+  d_night_vect$cluster <- cl$cluster
+  d_night$cluster <- d_night_vect$cluster
+  
+  # creation of a template base on the UP (Pastoral unity)
+  res_m <- 10
+  buffer_m <- 100
+  up <- terra::vect(UP_file)
+  up <- terra::project(up, "EPSG:2154")
+  e <- terra::ext(up)
+  e <- terra::ext(e$xmin-buffer_m, e$xmax+buffer_m,
+                  e$ymin-buffer_m, e$ymax+buffer_m)
+  snap_down <- function(v, res) floor(v / res) * res
+  snap_up   <- function(v, res) ceiling(v / res) * res
+  
+  e <- terra::ext(
+    snap_down(e$xmin, res_m), snap_up(e$xmax, res_m),
+    snap_down(e$ymin, res_m), snap_up(e$ymax, res_m)
+  )
+  template <- terra::rast(e, res = res_m, crs = "EPSG:2154")
+  terra::values(template) <- 0
+  terra::writeRaster(template, output_rast_file, overwrite = TRUE)
+  
+  # KDE + 95% par cluster
+  k_list <- sort(unique(d_night$cluster))
+  k_list <- k_list[k_list > 0]   # ignore cluster 0 = bruit
+  
+  iso_list <- list()
+  
+  for (k in k_list) {
+    
+    sub <- d_night[d_night$cluster == k, ]
+    
+    trk <- make_track(sub, x, y, time, crs = 2154, all_cols = TRUE)
+    
+    hr  <- hr_kde(trk, trast = template)          # lissage stable
+    iso <- hr_isopleths(hr, levels = 0.95)                    # contour "parc"
+    
+    iso$cluster <- k
+    iso_list[[as.character(k)]] <- iso
+  }
+  hr_isopleth95_all <- do.call(rbind, iso_list)
+  
+  
+  ### APPLIED A SIMPLE LOWER TO ADJUSTE NIGHT PARK
+  ## 1st RULES : Combine night park with a distance <500 m
+  
+  # Centroides of polygones
+  isopleth_sf <- st_as_sf(hr_isopleth95_all)  # isopleths 95% en sf
+  centroid_sf <- st_centroid(isopleth_sf)
+  
+  # Clustering des centroides <= 500m same grazing sector ans same night park
+  xy_centroid <- st_coordinates(centroid_sf)
+  buf <- if (alpage == "Sanguiniere") 500 else 500 
+  buffer_500  <- dbscan::dbscan(xy_centroid, eps = buf, minPts = 1)$cluster
+  isopleth_sf$park <- paste0("park_", buffer_500)
+  
+  # d : data.frame avec x,y
+  data_vect <- st_as_sf(d, coords = c("x","y"), crs = 2154, remove = FALSE)
+  
+  # isopleth_sf : MULTIPOLYGON avec colonne "park"
+  isopleth_sf <- st_make_valid(isopleth_sf)
+  
+  # park_point : NA si hors polygone
+  data_vect <- st_join(data_vect, isopleth_sf["park"], join = st_within)
+  
+  majority <- function(x){
+    x <- x[!is.na(x)]
+    if(!length(x)) return(NA_character_)
+    names(which.max(table(x)))
+  }
+  
+  n_vote <- 30
+  
+  day_park <- data_vect %>%
+    st_drop_geometry() %>%
+    mutate(day = as.Date(time)) %>%
+    group_by(day) %>%
+    summarise(
+      # 30 premiers points de la journée (tous IDs confondus)
+      park_start = majority(park[order(time)][1:min(n_vote, n())]),
+      # 30 derniers points
+      park_end   = majority(park[order(time, decreasing = TRUE)][1:min(n_vote, n())]),
+      park = case_when(
+        !is.na(park_start) & park_start == park_end ~ park_start,
+        !is.na(park_start) & !is.na(park_end) & park_start != park_end ~ "transition_day",
+        is.na(park_start) & !is.na(park_end) ~ park_end,     # début de série
+        !is.na(park_start) & is.na(park_end) ~ park_start,   # fin de série
+        TRUE ~ NA_character_
+      ),
+      .groups = "drop"
+    )
+  
+  exceptions <- list(
+    "Sanguiniere_2023" = as.Date(c("2023-08-11","2023-08-12","2023-08-13",
+                                   "2023-09-02","2023-09-03")),
+    "Viso_2024" = as.Date(c("2024-10-04", "2024-10-05"))
+  )
+  
+  day_park <- day_park %>% arrange(day)
+  key <- paste0(alpage, "_", YEAR)
+  
+  if (key %in% names(exceptions)) {
+    dates_fix <- exceptions[[key]]
+    
+    for (i in seq_len(nrow(day_park))) {
+      
+      if (day_park$day[i] %in% dates_fix) {
+        
+        # chercher le dernier "jour normal" avant i (pas transition_day, pas NA)
+        j <- i - 1
+        while (j >= 1 && (is.na(day_park$park[j]) || day_park$park[j] == "transition_day")) {
+          j <- j - 1
+        }
+        
+        # si trouvé, on applique
+        if (j >= 1) {
+          day_park$park[i] <- day_park$park[j]
+        }
+      }
+    }
+  }
+  
+  
+  # 1) Remap old park -> park_1..park_n (on ignore transition_day)
+  parks_kept <- day_park %>%
+    dplyr::filter(!is.na(park), park != "transition_day") %>%
+    dplyr::distinct(park) %>%
+    dplyr::pull(park)
+  
+  parks_kept_sorted <- parks_kept[order(as.integer(sub("park_", "", parks_kept)))]
+  
+  remap <- tibble::tibble(
+    old = parks_kept_sorted,
+    new = paste0("park_", seq_along(parks_kept_sorted))
+  )
+  
+  # 2) Appliquer remap dans day_park (transition_day inchangé), puis réinjecter dans d_end + save RDS
+  day_park <- day_park %>%
+    dplyr::left_join(remap, by = c("park" = "old")) %>%
+    dplyr::mutate(park = dplyr::if_else(!is.na(new), new, park)) %>%
+    dplyr::select(-new)
+  
+  # 3) SHP : garder transition_park (mais RDS garde transition_day)
+  isopleth_final <- isopleth_sf %>%
+    dplyr::mutate(park = dplyr::if_else(park %in% parks_kept, park, "transition_park")) %>%
+    dplyr::left_join(remap, by = c("park" = "old")) %>%
+    dplyr::mutate(park = dplyr::if_else(!is.na(new), new, park)) %>%
+    dplyr::select(-new) %>%
+    dplyr::group_by(park) %>%
+    dplyr::summarise(geometry = sf::st_union(geometry), .groups = "drop")
+  
+  
+  # ---- Stable park names between years (simple) ----
+  dist_max <- 300
+  
+  cent <- st_coordinates(st_centroid(isopleth_final))
+  parks_year <- tibble::tibble(park = isopleth_final$park, x = cent[,1], y = cent[,2]) %>%
+    dplyr::filter(park != "transition_park") %>%
+    dplyr::distinct()
+  
+  if (!file.exists(ref_file)) {
+    # first run: create reference
+    ref <- parks_year %>% dplyr::transmute(park_stable = park, x_ref = x, y_ref = y)
+    saveRDS(ref, ref_file)
+  } else {
+    ref <- readRDS(ref_file)
+    next_id <- max(as.integer(sub("park_", "", ref$park_stable)), na.rm = TRUE)
+    
+    # match each park of this year to closest reference park
+    map <- parks_year %>%
+      rowwise() %>%
+      mutate(
+        park_stable = {
+          dvec <- sqrt((ref$x_ref - x)^2 + (ref$y_ref - y)^2)
+          j <- which.min(dvec)
+          if (dvec[j] <= dist_max) ref$park_stable[j] else NA_character_
+        }
+      ) %>%
+      ungroup() %>%
+      dplyr::select(park, park_stable)
+    
+    
+    # new parks -> park_(max+1)
+    for (i in which(is.na(map$park_stable))) {
+      next_id <- next_id + 1
+      map$park_stable[i] <- paste0("park_", next_id)
+    }
+    
+    # apply to SHP
+    isopleth_final <- isopleth_final %>%
+      dplyr::left_join(map, by = "park") %>%
+      dplyr::mutate(park = dplyr::if_else(!is.na(park_stable), park_stable, park)) %>%
+      dplyr::select(-park_stable)
+    
+    # apply to day_park (RDS): only for real parks, keep transition_day
+    day_park <- day_park %>%
+      dplyr::left_join(map, by = "park") %>%
+      dplyr::mutate(park = dplyr::if_else(park != "transition_day" & !is.na(park_stable), park_stable, park)) %>%
+      dplyr::select(-park_stable)
+    
+    # update reference with new parks
+    new_ref <- parks_year %>%
+      dplyr::left_join(map, by = "park") %>%
+      dplyr::filter(!(park_stable %in% ref$park_stable)) %>%
+      dplyr::transmute(park_stable, x_ref = x, y_ref = y)
+    
+    if (nrow(new_ref) > 0) saveRDS(dplyr::bind_rows(ref, new_ref), ref_file)
+  }
+  
+  sf::st_write(isopleth_final, output_shp_file, append = FALSE)
+  
+  d_end <- d %>%
+    dplyr::mutate(day = as.Date(time)) %>%
+    dplyr::left_join(day_park %>% dplyr::select(day, park), by = "day") %>%
+    dplyr::select(-day)
+  
+  saveRDS(d_end, output_rds_file)
+  
+  
+  
+  
+  d_end$doy <- yday(d_end$time)
+  
+  df <- d_end %>%
+    dplyr::count(doy, park, name = "n") %>%
+    dplyr::group_by(doy) %>%
+    dplyr::slice_max(n, n = 1, with_ties = FALSE) %>%
+    dplyr::ungroup() %>%
+    dplyr::select(doy, park)
+  
+  ggplot(df, aes(x = doy, y = park, colour = park)) +
+    geom_point(size = 2, alpha = 0.9) +
+    labs(x = "DOY", y = NULL, colour = "Nigth_Park") +
+    theme_minimal(base_size = 12) +
+    theme(panel.grid.minor = element_blank())
+  
+}
+
+#### 4. HMM FITTING #### 
 #----------------------#
 if (TRUE) {
   ## DESCRIPTION ##
@@ -326,19 +644,19 @@ if (TRUE) {
   source(file.path(functions_dir, "Functions_HMM_fitting.R"))
   
   ## INPUTS ##
+  nightpark_output_dir <- file.path(output_dir, "3. Night_park")
+  if (!dir.exists(nightpark_output_dir)) {dir.create(nightpark_output_dir, recursive = TRUE)}
+  
   # An .RDS file containing the trajectories filtered in 2.2
-  input_rds_file <- file.path(output_dir, "2. Filtre_de_Bjorneraas", paste0("Catlog_", YEAR, "_filtered_", alpage,".rds"))
+  input_rds_file <- file.path(output_dir, "3. Night_park", paste0("Catlog_",YEAR,"_night_park_",alpage,".rds"))
   
   # A data.frame containing the correspondence between collars and alpine pastures
   individual_info_file <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"), paste0(YEAR, "_colliers_poses.csv"))
-  
-  # OPTONIAL CKECK
-  #str(read.csv(individual_info_file, stringsAsFactors = FALSE, encoding = "UTF-8"))
-  
+  check_and_correct_csv(csv_path = individual_info_file)
   
   ## OUTPUTS ##
   # Creation of the subfolder to store the results of the Bjorneraas filter
-  filter_output_dir <- file.path(output_dir, "3. HMM_comportement")
+  filter_output_dir <- file.path(output_dir, "4. HMM_comportement")
   if (!dir.exists(filter_output_dir)) {
     dir.create(filter_output_dir, recursive = TRUE)
   }
@@ -351,9 +669,7 @@ if (TRUE) {
   
   # An .RDS file containing the trajectories categorized by behavior 
   # (new trajectories are appended to the previously processed ones)
-  output_rds_file = file.path(output_dir, "3. HMM_comportement", paste0("Catlog_",YEAR,"_",alpage,"_viterbi.rds"))
-  
-  
+  output_rds_file = file.path(output_dir, "4. HMM_comportement", paste0("Catlog_",YEAR,"_",alpage,"_viterbi.rds"))
   
   ## CODE ##
   
@@ -387,13 +703,14 @@ if (TRUE) {
   startTime = Sys.time()
   results = par_HMM_fit(data, run_parameters, ncores = ncores, individual_info_file, sampling_period = 120, output_dir = hmm_pdf_case)
   endTime = Sys.time()
-   
+  
   data_hmm <- do.call("rbind", lapply(results, function(result) result$data))
   viterbi_trajectory_to_rds(data_hmm, output_rds_file, individual_info_file)
+  
 }
 
-#### 4. FLOCK STOCKING RATE (charge) BY DAY AND BY STATE ####
-#-------------------------------------------------------------#
+#### 5. FLOCK STOCKING RATE BY DAY BY STATE AND BY PARK ####
+#----------------------------------------------------------#
 if (TRUE){
   
   ## DESCRIPTION ##
@@ -425,17 +742,20 @@ if (TRUE){
   ## INPUTS ##
   
   # An .RDS file containing the trajectories categorized by behavior
-  input_rds_file <- file.path(output_dir, "3. HMM_comportement",  paste0("Catlog_", YEAR, "_", alpage, "_viterbi.rds"))
-
+  input_rds_file <- file.path(output_dir, "4. HMM_comportement",  paste0("Catlog_", YEAR, "_", alpage, "_viterbi.rds"))
+  
   # A .csv file "infos_alpages" filled in according to the demo dataset template
+  raw_data_dir <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"))
   AIF <- file.path(raw_data_dir, paste0(YEAR,"_infos_alpages.csv"))
   check_and_correct_csv(csv_path = AIF)
   
   # A data.frame containing herd sizes and their changes over time based on the date
-  raw_data_dir <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"))
   flock_size_file <- file.path(raw_data_dir, paste0(YEAR, "_tailles_troupeaux.csv"))
   check_and_correct_csv(csv_path = flock_size_file)
   
+  # rast of the template 
+  template_case = file.path(raster_dir, "template")
+  grid = file.path(template_case, paste0("template_",alpage,".tif"))
   ## OPTIONAL CHECK
   #str(read.csv(flock_size_file, stringsAsFactors = FALSE, encoding = "UTF-8"))
   
@@ -443,34 +763,40 @@ if (TRUE){
   ## OUTPUTS ##
   # Output folder
   
-  save_dir <- file.path(output_dir, "4. Chargements_calcules")
+  save_dir <- file.path(output_dir, "5. Stocking_rate")
+  alpage_save_dir <- file.path(save_dir, paste0(YEAR, "_", alpage))
+  if (!dir.exists(alpage_save_dir)) dir.create(alpage_save_dir, recursive = TRUE)
   
   # One .RDS per alpine pasture containing the daily loads by behavior
   state_daily_rds_prefix <- paste0("by_day_and_state_", YEAR, "_")
+  # One .RDS per alpine pasture containing the daily loads by behavior and park 
+  state_daily_park_rds_prefix <- paste0("by_day_state_and_park_", YEAR, "_")
   # One .RDS per alpine pasture containing the daily loads
   daily_rds_prefix <- paste0("by_day_", YEAR, "_")
   # One .RDS per alpine pasture containing the loads by behavior
   state_rds_prefix <- paste0("by_state_", YEAR, "_")
   # One .RDS per alpine pasture containing the total load over the entire season
-  
   total_rds_prefix <- paste0("total_", YEAR, "_")
-  
+  # One .RDS per day and grazing sector
+  day_park_rds_prefix <- paste0("by_day_and_park_", YEAR, "_")
+  # One .RDS per grazing sector
+  park_rds_prefix <- paste0("by_park_", YEAR, "_")
   
   ## CODE ##
   h <- 10 # Characteristic distance for calculating stocking
-
+  
   for (alpage in alpages) {
     flock_sizes <- get_flock_size_through_time(alpage, flock_size_file)
     prop_time_collar_on <- get_alpage_info(alpage, AIF, "proportion_jour_allume")
     
     # Loading the filtered data for the alpine pasture
-      data <- readRDS(input_rds_file)
+    data <- readRDS(input_rds_file)
     data <- data[data$alpage == alpage,]
     
     if(FALSE){
-    # Loading the phenology raster with the correct path
-    raster_file <- file.path(raster_dir, paste0("ndvis_", YEAR,"_",alpage, "_pheno_metrics.tif"))
-    pheno_t0 <- get_raster_cropped_L93(raster_file, get_minmax_L93(data, 100), reproject = TRUE, band = 2, as = "SpatialPixelDataFrame")
+      # Loading the phenology raster with the correct path
+      template_file = file.path(template_case, paste0("template_",alpage,".tif"))
+      pheno_t0 <- get_raster_cropped_L93(template_file, get_minmax_L93(data, 100), reproject = TRUE, band = 2, as = "SpatialPixelDataFrame")
     }
     
     # Definition of the storage folder specific to the alpine pasture
@@ -480,22 +806,39 @@ if (TRUE){
     
     # BY day and by state 
     # Calculation of stocking based on an automatic grid (pixelization)
-    if(TRUE){
-    flock_load_by_day_and_state_to_rds_kernelbb_Auto_grid(data, alpage_save_dir,state_daily_rds_prefix, flock_sizes,prop_time_collar_on)
+    if(FALSE){
+      flock_load_by_day_and_state_to_rds_kernelbb_Auto_grid(data, alpage_save_dir,state_daily_rds_prefix, flock_sizes,prop_time_collar_on)
     }
     
     # Calculation of stocking based on the NDVI raster (unsuitable for other users)
-    if(FALSE){
-    flock_load_by_day_and_state_to_rds_kernelbb_NDVI_grid(data, grid, save_dir, save_rds_name, flock_sizes, prop_time_collar_on)
-    }
+    
+    template_file <- file.path(template_case, paste0("template_", alpage, ".tif"))
+    r_template <- raster::raster(template_file)
+    grid_sp <- as(r_template, "SpatialPixelsDataFrame")
+    flock_load_by_day_and_state_to_rds_kernelbb_grid(data, grid_sp, alpage_save_dir, state_daily_rds_prefix, flock_sizes, prop_time_collar_on)
+    
     
     # Merging individual files
-    merged_file <- flock_merge_rds_files(alpage_save_dir, state_daily_rds_prefix)
+    merged_file <- flock_merge_rds_files(alpage_save_dir, state_daily_rds_prefix, alpage)
     
     rm(data)
     
+    # By day, state and park
     charge <- readRDS(file.path(alpage_save_dir, paste0(state_daily_rds_prefix, alpage, ".rds")))
     unique(charge$state)
+    park <- readRDS(input_rds_file)
+    park <- park %>%
+      dplyr::mutate(day = lubridate::yday(time)) %>%
+      dplyr::count(day, park, name = "n") %>%
+      dplyr::group_by(day) %>%
+      dplyr::slice_max(n, n = 1, with_ties = FALSE) %>%
+      dplyr::ungroup() %>%
+      dplyr::select(day, park)
+    
+    by_day_state_park<- charge %>%
+      left_join(park, by = "day")
+    
+    saveRDS(by_day_state_park, file.path(alpage_save_dir, paste0(state_daily_park_rds_prefix, alpage, ".rds")))
     
     # By state
     charge_state <- charge %>%
@@ -524,14 +867,35 @@ if (TRUE){
     saveRDS(charge_tot, file.path(alpage_save_dir, paste0(total_rds_prefix, alpage, ".rds")))
     rm(charge_tot)
     
+    # By park and day
+    
+    
+    charge <- charge %>%
+      left_join(park, by = "day")
+    
+    charge_day_park <- charge %>%
+      group_by(x, y, day, park) %>%
+      summarise(Charge = sum(Charge, na.rm = TRUE), .groups = "drop") %>%
+      as.data.frame()
+    
+    saveRDS(charge_day_park, file.path(alpage_save_dir, paste0(day_park_rds_prefix, alpage, ".rds")))
+    rm(charge_day_park)
+    
+    # By park
+    
+    charge_park <- charge %>%
+      group_by(x, y, park) %>%
+      summarise(Charge = sum(Charge, na.rm = TRUE), .groups = "drop") %>%
+      as.data.frame()
+    
+    saveRDS(charge_park, file.path(alpage_save_dir, paste0(park_rds_prefix, alpage, ".rds")))
+    rm(charge_park)
     rm(charge)
     
-    
-    
-    }
-
-
-
+  }
+  
+  
+  
 }
 
 
