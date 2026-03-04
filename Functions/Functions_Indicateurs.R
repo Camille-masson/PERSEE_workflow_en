@@ -1,8 +1,19 @@
 
 
-
-# Fonction Chargement total brut et crop
-total_flock_load_tif <- function(total_rds_prefix, output_flock_tot_tif, output_flock_tot_tif_crop, UP_file, alpage, alpage_info_file, res_raster = 10, CROP = "YES") {
+# Fonction Chargement total brut et crop (version corrigée : tout en "raster")
+total_flock_load_tif <- function(total_rds_prefix,
+                                 output_flock_tot_tif,
+                                 output_flock_tot_tif_crop,
+                                 UP_file,
+                                 alpage,
+                                 alpage_info_file,
+                                 res_raster = 10,
+                                 CROP = "YES") {
+  
+  # Packages
+  library(raster)
+  library(sp)
+  library(terra)  # uniquement pour vect() + conversion, sans utiliser mask/crop terra
   
   # Chargement des données
   charge_data <- readRDS(total_rds_prefix)
@@ -12,40 +23,48 @@ total_flock_load_tif <- function(total_rds_prefix, output_flock_tot_tif, output_
     stop("Les colonnes x, y ou Charge sont manquantes dans les données.")
   }
   
-  # Conversion en SpatialPointsDataFrame (Lambert 93)
+  # Conversion en SpatialPointsDataFrame (Lambert-93)
   coordinates(charge_data) <- ~ x + y
-  crs(charge_data) <- CRS("+init=epsg:2154")
+  sp::proj4string(charge_data) <- sp::CRS("EPSG:2154")
   
   # Création du raster vide avec résolution définie
-  raster_template <- raster(extent(charge_data), resolution = res_raster, crs = crs(charge_data))
+  raster_template <- raster::raster(raster::extent(charge_data),
+                                    resolution = res_raster,
+                                    crs = sp::proj4string(charge_data))
   
   # Rasteriser les données
-  charge_raster <- rasterize(charge_data, raster_template, field = "Charge", fun = mean, background = NA)
-  
-  
+  charge_raster <- raster::rasterize(charge_data, raster_template,
+                                     field = "Charge", fun = mean, background = NA)
   
   # Export du raster complet
   if (file.exists(output_flock_tot_tif)) file.remove(output_flock_tot_tif)
-  writeRaster(charge_raster, filename = output_flock_tot_tif, format = "GTiff", overwrite = TRUE)
+  raster::writeRaster(charge_raster, filename = output_flock_tot_tif,
+                      format = "GTiff", overwrite = TRUE)
   cat("Raster complet sauvegardé avec succès :", output_flock_tot_tif, "\n")
   
   # Gestion du raster découpé si demandé
   if (toupper(CROP) == "YES") {
-    UP_selected <- get_UP_shp(alpage, alpage_info_file, UP_file)
+    # Lire l'UP en terra puis convertir en sp (pour rester cohérent avec raster::mask/crop)
+    UP_selected <- terra::vect(UP_file)
     
     if (nrow(UP_selected) == 0) {
       warning("Aucune Unité Pastorale trouvée pour l'alpage spécifié. Le raster crop ne sera pas généré.")
-    } else {
-      charge_raster_crop <- mask(crop(charge_raster, UP_selected), UP_selected)
-      
-      # Suppression préalable si nécessaire
-      if (file.exists(output_flock_tot_tif_crop)) file.remove(output_flock_tot_tif_crop)
-      
-      # Export du raster crop en GeoTIFF
-      writeRaster(charge_raster_crop, filename = output_flock_tot_tif_crop, format = "GTiff", overwrite = TRUE)
-      cat("Raster découpé sauvegardé avec succès :", output_flock_tot_tif_crop, "\n")
+      return(invisible(NULL))
     }
+    
+    UP_sp <- as(UP_selected, "Spatial")
+    
+    # Crop + mask en raster/sp
+    charge_raster_crop <- raster::mask(raster::crop(charge_raster, UP_sp), UP_sp)
+    
+    # Export du raster crop
+    if (file.exists(output_flock_tot_tif_crop)) file.remove(output_flock_tot_tif_crop)
+    raster::writeRaster(charge_raster_crop, filename = output_flock_tot_tif_crop,
+                        format = "GTiff", overwrite = TRUE)
+    cat("Raster découpé sauvegardé avec succès :", output_flock_tot_tif_crop, "\n")
   }
+  
+  invisible(NULL)
 }
 
 
