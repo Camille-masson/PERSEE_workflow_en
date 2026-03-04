@@ -2,6 +2,7 @@
 source("Functions/Functions_map_plot.R")
 
 
+
 ### FUNCTIONS ###
 #---------------#
 
@@ -374,60 +375,35 @@ viterbi_trajectory_to_rds <- function(data_hmm, output_file, individual_info_fil
   }
   individual_info <- read.csv(individual_info_file, header = TRUE, stringsAsFactors = FALSE)
   
-  required_cols <- c("Collier", "Alpage", "Espece", "Race")
-  missing_cols <- setdiff(required_cols, colnames(individual_info))
-  if (length(missing_cols) > 0) {
-    stop("[ERREUR] Colonnes manquantes dans `individual_info_file` : ",
-         paste(missing_cols, collapse = ", "))
+  # --- DROP step/angle uniquement s'ils existent ---
+  drop_cols <- intersect(c("step", "angle"), names(data_hmm))
+  data_save <- as.data.frame(data_hmm[, setdiff(names(data_hmm), drop_cols), drop = FALSE])
+  
+  # --- Harmonisation de state ---
+  stateNames <- c("Repos", "Paturage", "Deplacement")
+  if (is.numeric(data_save$state) || is.integer(data_save$state)) {
+    data_save$state <- factor(stateNames[data_save$state], levels = stateNames)
+  } else {
+    # si déjà factor/char, on garde mais on force l’ordre si possible
+    data_save$state <- factor(as.character(data_save$state), levels = stateNames)
   }
   
-  data_save <- as.data.frame(subset(data_hmm, select = -c(step, angle)))
-  stateNames <- c("Repos", "Paturage", "Deplacement")
-  data_save$state <- factor(stateNames[data_save$state], levels = stateNames)
+  # Nettoyage minimal
   data_save <- data_save[!is.na(data_save$x), ]
   
+  # Merge avec métadonnées (si tu en as besoin)
   merged_data <- merge(data_save, individual_info, by.x = "ID", by.y = "Collier", all.x = TRUE)
   
-  ## --- HARMONISATION MINIMALE POUR ÉVITER L'ERREUR SUR CATLOG ---
-  # 1) Alpage -> alpage (si pas déjà présent)
-  if (!"alpage" %in% names(merged_data) && "Alpage" %in% names(merged_data)) {
-    merged_data$alpage <- merged_data$Alpage
-  }
-  # 2) hour depuis time si absent
-  if (!"hour" %in% names(merged_data) && "time" %in% names(merged_data)) {
-    # heure décimale (H + M/60)
-    hh <- suppressWarnings(as.numeric(format(merged_data$time, "%H")))
-    mm <- suppressWarnings(as.numeric(format(merged_data$time, "%M")))
-    merged_data$hour <- hh + mm/60
-  }
-  # 3) state_proba si nom différent/absente (optionnel mais sûr)
-  if (!"state_proba" %in% names(merged_data)) {
-    # essaie quelques variantes usuelles
-    alt <- intersect(c("stateProb","state_prob","stateproba"), names(merged_data))
-    if (length(alt)) {
-      merged_data$state_proba <- merged_data[[alt[1]]]
-    } else {
-      # sinon NA (meilleur que de planter)
-      merged_data$state_proba <- NA_real_
-    }
-  }
-  
-  # 4) Assure la présence de toutes les colonnes attendues
+  # Assure les colonnes finales
   final_cols <- c("ID","time","x","y","hour","state","state_proba","alpage","Espece","Race")
   for (nm in setdiff(final_cols, names(merged_data))) merged_data[[nm]] <- NA
   
   final_data <- merged_data[, final_cols]
-  
-  # Renomme Espece/Race -> species/race
   names(final_data)[names(final_data)=="Espece"] <- "species"
   names(final_data)[names(final_data)=="Race"]   <- "race"
   
-  tryCatch({
-    saveRDS(final_data, file = output_file)
-    cat("[INFO] Sauvegarde réussie dans : ", output_file, "\n")
-  }, error = function(e) {
-    cat("[ERREUR] Impossible d'enregistrer le fichier RDS !\nMessage: ", e$message, "\n")
-  })
+  saveRDS(final_data, file = output_file)
+  cat("[INFO] Sauvegarde réussie dans : ", output_file, "\n")
   flush.console()
 }
 
@@ -666,16 +642,6 @@ get_sampling_parameters <- function(sampling_period) {
   
   return(list(sampling_period = sampling_period, resampling_ratio = resampling_ratio, param_scaling_factor = param_scaling_factor))
 }
-
-
-
-
-
-
-
-
-
-
 
 
 

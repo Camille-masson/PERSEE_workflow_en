@@ -469,7 +469,123 @@ build_id_candidates <- function(x) {
 
 
 
-
+identify_sampling_period <- function(data_dir, YEAR, TYPE, alpages, output_dir) {
+  
+  raw_data_dir <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"))
+  
+  filter_output_dir <- file.path(output_dir, "0. Sampling_Periods")
+  if (!dir.exists(filter_output_dir)) dir.create(filter_output_dir, recursive = TRUE)
+  
+  sampling_results <- lapply(alpages, function(alpage) {
+    
+    collar_dir <- file.path(raw_data_dir, alpage)
+    
+    file_pattern <- if (TYPE == "catlog") "\\.csv$" else "\\.Rdata$"
+    collar_files <- list.files(collar_dir, pattern = file_pattern, full.names = TRUE)
+    
+    if (length(collar_files) == 0) {
+      warning(paste("No files found in", collar_dir, "for TYPE =", TYPE))
+      return(NULL)
+    }
+    
+    pdf(file.path(filter_output_dir, paste0("Sampling_Periods_", YEAR, "_", alpage, ".pdf")),
+        width = 9, height = 9)
+    
+    results <- lapply(collar_files, function(collar_f) {
+      
+      collar_ID <- strsplit(basename(collar_f), split = "_")[[1]][1]
+      message("Processing file: ", collar_f, " | Collar ID: ", collar_ID)
+      
+      traject <- switch(
+        TYPE,
+        "catlog" = load_catlog_data(collar_f),
+        "other"  = load_other_data_rdata(collar_f),
+        stop("Unrecognized TYPE: please choose 'catlog' or 'other'")
+      )
+      
+      if (!"date" %in% names(traject)) {
+        stop(paste("ERREUR: les données du collier", collar_ID,
+                   "ne contiennent pas de colonne 'date'"))
+      }
+      
+      # Date en POSIXct + tri
+      traject$date <- as.POSIXct(traject$date, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+      traject <- traject[order(traject$date), ]
+      
+      # --- NEW: start/end (première & dernière loc) ---
+      start_dt <- traject$date[which.min(traject$date)]
+      end_dt   <- traject$date[which.max(traject$date)]
+      
+      # Différences de temps (secondes)
+      time_diffs <- diff(as.numeric(traject$date))
+      
+      if (length(time_diffs) == 0) {
+        stop(paste("ERREUR: Aucune différence de temps calculée pour le collier",
+                   collar_ID, "- Vérifiez les données !"))
+      }
+      
+      # Filtrer valeurs aberrantes
+      threshold <- quantile(time_diffs, 0.95, na.rm = TRUE)
+      time_diffs <- time_diffs[time_diffs <= threshold]
+      
+      if (length(time_diffs) == 0) {
+        stop(paste("ERREUR: Aucune donnée valide après filtrage pour le collier",
+                   collar_ID, "- Vérifiez les données !"))
+      }
+      
+      min_time <- min(time_diffs, na.rm = TRUE)
+      max_time <- max(time_diffs, na.rm = TRUE)
+      
+      if (min_time == max_time) {
+        warning(paste("Tous les points sont espacés de", min_time,
+                      "secondes pour le collier", collar_ID, "- Histogramme inutile."))
+        mode_interval <- min_time
+      } else {
+        breaks_seq <- seq(min_time, max_time, length.out = 30)
+        hist_vals <- hist(time_diffs, breaks = breaks_seq, plot = FALSE)
+        mode_interval <- hist_vals$breaks[which.max(hist_vals$counts)]
+        
+        hist(time_diffs, breaks = breaks_seq, col = "lightblue",
+             main = paste("Collar ID:", collar_ID),
+             xlab = "Intervalle de temps (secondes)", ylab = "Fréquence")
+        abline(v = mode_interval, col = "red", lwd = 2, lty = 2)
+      }
+      
+      sampling_period_min <- round(mode_interval / 60)
+      sampling_period_min <- max(sampling_period_min, 1)
+      
+      # Retour en data.frame (plus simple que list->rbind)
+      data.frame(
+        alpage = alpage,
+        ID = collar_ID,
+        start = start_dt,
+        end = end_dt,
+        SAMPLING = sampling_period_min,
+        sampling_period = sampling_period_min * 60,
+        stringsAsFactors = FALSE
+      )
+    })
+    
+    dev.off()
+    
+    results_df <- do.call(rbind, results)
+    
+    # (Optionnel) Sauvegarde par alpage
+    saveRDS(results_df,
+            file.path(filter_output_dir, paste0("Sampling_periods_", YEAR, "_", alpage, ".rds")))
+    
+    results_df
+  })
+  
+  # Assemblage global
+  sampling_periods <- do.call(rbind, sampling_results)
+  
+  # Sauvegarde globale (tous alpages)
+  saveRDS(sampling_periods,
+          file.path(filter_output_dir, paste0("Sampling_periods_", YEAR, "_ALL.rds")))
+  
+  return(sampling_periods)
+}
 
 
 
