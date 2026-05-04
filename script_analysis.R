@@ -6,9 +6,9 @@ gc()
 source("config.R")
 
 # Definition of the analysis year and the alpine pastures to process
-YEAR = 2023
-alpage = "Rouanette"
-alpages = "Rouanette"
+YEAR = 2024
+alpage = "Grande-Cabane"
+alpages = "Grande-Cabane"
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
@@ -55,7 +55,7 @@ if (TRUE) {
   
   lapply(alpages, function(alpage) {
     collar_dir <- file.path(raw_data_dir, alpage) 
-    collar_files <- list.files(collar_dir, full.names = TRUE) 
+    collar_files <- list.files(collar_dir,pattern = "\\.csv$",full.names = TRUE,ignore.case = TRUE) 
     lapply(collar_files, function(collar_f) {
       collar_ID <- substr(basename(collar_f), 1, 3)
       load_catlog_data(collar_f) %>% 
@@ -211,7 +211,6 @@ if (TRUE) {
   #   outputs/2. Bjorneraas_filters/Catlog_9999_filtered_alpage_demo.rds
   # - .csv file containing collar performance:
   #   outputs/2. Bjorneraas_filters/9999_filtering_alpages.csv
-  
   
   ## LIBRARY ##
   source(file.path(functions_dir, "Functions_filtering.R"))
@@ -376,23 +375,39 @@ if (TRUE){
   d_night_vect$cluster <- cl$cluster
   d_night$cluster <- d_night_vect$cluster
   
-  # creation of a template base on the UP (Pastoral unity)
+  # 3) template creation
   res_m <- 10
   buffer_m <- 100
+  
   up <- terra::vect(UP_file)
   up <- terra::project(up, "EPSG:2154")
-  e <- terra::ext(up)
-  e <- terra::ext(e$xmin-buffer_m, e$xmax+buffer_m,
-                  e$ymin-buffer_m, e$ymax+buffer_m)
+  
+  pts <- terra::vect(d_night_vect)
+  pts <- terra::project(pts, "EPSG:2154")
+  
+  e_up  <- terra::ext(up)
+  e_pts <- terra::ext(pts)
+  
+  e <- terra::ext(
+    min(e_up$xmin, e_pts$xmin) - buffer_m,
+    max(e_up$xmax, e_pts$xmax) + buffer_m,
+    min(e_up$ymin, e_pts$ymin) - buffer_m,
+    max(e_up$ymax, e_pts$ymax) + buffer_m
+  )
+  
   snap_down <- function(v, res) floor(v / res) * res
   snap_up   <- function(v, res) ceiling(v / res) * res
   
   e <- terra::ext(
-    snap_down(e$xmin, res_m), snap_up(e$xmax, res_m),
-    snap_down(e$ymin, res_m), snap_up(e$ymax, res_m)
+    snap_down(e$xmin, res_m),
+    snap_up(e$xmax, res_m),
+    snap_down(e$ymin, res_m),
+    snap_up(e$ymax, res_m)
   )
+  
   template <- terra::rast(e, res = res_m, crs = "EPSG:2154")
-  terra::values(template) <- 0
+  terra::values(template) <- 1
+  
   terra::writeRaster(template, output_rast_file, overwrite = TRUE)
   
   # KDE + 95% par cluster
@@ -641,6 +656,7 @@ if (TRUE) {
   library(knitr)
   library(rmarkdown)
   source(file.path(functions_dir, "Functions_HMM_fitting.R"))
+  source(file.path(functions_dir, "Functions_check_metadata.R"))
   
   ## INPUTS ##
   nightpark_output_dir <- file.path(output_dir, "3. Night_park")
@@ -792,25 +808,11 @@ if (TRUE){
     data <- readRDS(input_rds_file)
     data <- data[data$alpage == alpage,]
     
-    if(FALSE){
-      # Loading the phenology raster with the correct path
-      template_file = file.path(template_case, paste0("template_",alpage,".tif"))
-      pheno_t0 <- get_raster_cropped_L93(template_file, get_minmax_L93(data, 100), reproject = TRUE, band = 2, as = "SpatialPixelDataFrame")
-    }
-    
     # Definition of the storage folder specific to the alpine pasture
     alpage_save_dir <- file.path(save_dir, paste0(YEAR, "_", alpage))
     if (!dir.exists(alpage_save_dir)) dir.create(alpage_save_dir, recursive = TRUE)
     
-    
-    # BY day and by state 
-    # Calculation of stocking based on an automatic grid (pixelization)
-    if(FALSE){
-      flock_load_by_day_and_state_to_rds_kernelbb_Auto_grid(data, alpage_save_dir,state_daily_rds_prefix, flock_sizes,prop_time_collar_on)
-    }
-    
     # Calculation of stocking based on the NDVI raster (unsuitable for other users)
-    
     template_file <- file.path(template_case, paste0("template_", alpage, ".tif"))
     r_template <- raster::raster(template_file)
     grid_sp <- as(r_template, "SpatialPixelsDataFrame")
@@ -896,9 +898,6 @@ if (TRUE){
   
   
 }
-
-
-
 
 # BONUS
 {
@@ -1380,5 +1379,7 @@ if (TRUE){
     
     
   }
+  
+}
     
     
