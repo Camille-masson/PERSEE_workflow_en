@@ -1,6 +1,5 @@
 ### CONFIGURATION DU PROJET ###
 
-
 #Installed.Package
 if (!require("renv")) install.packages("renv")
 library(renv)

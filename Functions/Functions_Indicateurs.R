@@ -8,7 +8,7 @@ total_flock_load_tif <- function(total_rds_prefix,
                                  alpage,
                                  alpage_info_file,
                                  res_raster = 10,
-                                 CROP = "YES") {
+                                 CROP = "NO") {
   
   # Packages
   library(raster)
@@ -964,8 +964,6 @@ generate_presence_polygons_by_percentage_per_month <- function(state_rds_file, o
   
   # Lecture des données et filtrage sur l'alpage et l'année
   data <- readRDS(state_rds_file)
-  data <- data[data$alpage == alpage, ]
-  data <- data %>% filter(year(time) == YEAR)
   
   # Regroupement par mois : Juin, Juillet, Août, Septembre
   # Si le mois est octobre (10), il sera regroupé avec septembre (9)
