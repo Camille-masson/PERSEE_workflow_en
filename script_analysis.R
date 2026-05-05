@@ -7,7 +7,7 @@ gc()
 source("config.R")
 
 ## Definition of the analysis year and the alpine pastures to process ##
-YEAR = 2025
+YEAR = 2024
 alpage = "Parau"
 alpages = c("Parau","Mourtes")
 TYPE <- "other" #Type of input data : catlog (at 2 minute) or other (catlog/other)
