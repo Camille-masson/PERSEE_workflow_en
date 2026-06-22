@@ -7,8 +7,8 @@ source("config.R")
 
 # Definition of the analysis year and the alpine pastures to process
 YEAR = 2024
-alpage = "Grande-Cabane"
-alpages = "Grande-Cabane"
+alpage = "Viso"
+alpages = "Viso"
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
@@ -292,6 +292,11 @@ if (TRUE) {
   }
 }
 
+
+
+
+
+
 #### 3. Night parc identification ####
 #------------------------------------#
 if (TRUE){
@@ -410,6 +415,10 @@ if (TRUE){
   
   terra::writeRaster(template, output_rast_file, overwrite = TRUE)
   
+  
+  
+  
+  
   # KDE + 95% par cluster
   k_list <- sort(unique(d_night$cluster))
   k_list <- k_list[k_list > 0]   # ignore cluster 0 = bruit
@@ -423,7 +432,7 @@ if (TRUE){
     trk <- make_track(sub, x, y, time, crs = 2154, all_cols = TRUE)
     
     hr  <- hr_kde(trk, trast = template)          # lissage stable
-    iso <- hr_isopleths(hr, levels = 0.95)                    # contour "parc"
+    iso <- hr_isopleths(hr, levels = 0.9)                    # contour "parc"
     
     iso$cluster <- k
     iso_list[[as.character(k)]] <- iso
@@ -1075,7 +1084,7 @@ if (TRUE){
     
     ## CODE
     
-    nb_grazing_day(daily_rds_file, output_nb_grazing_day_tif)
+    nb_grazing_day(daily_rds_file, output_nb_grazing_day_tif, seuil = 1)
     
     
   }
@@ -1382,4 +1391,387 @@ if (TRUE){
   
 }
     
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+library(terra)
+
+# paramètres
+res_m    <- 10
+buffer_m <- 100
+
+# lire UP
+up <- terra::vect(UP_file)
+up <- terra::project(up, "EPSG:2154")
+
+# extent UP + buffer
+e <- terra::ext(up)
+e <- terra::ext(
+  e$xmin - buffer_m,
+  e$xmax + buffer_m,
+  e$ymin - buffer_m,
+  e$ymax + buffer_m
+)
+
+# snap sur la résolution
+snap_down <- function(v, res) floor(v / res) * res
+snap_up   <- function(v, res) ceiling(v / res) * res
+
+e <- terra::ext(
+  snap_down(e$xmin, res_m),
+  snap_up(e$xmax, res_m),
+  snap_down(e$ymin, res_m),
+  snap_up(e$ymax, res_m)
+)
+
+# créer template
+template <- terra::rast(e, res = res_m, crs = "EPSG:2154")
+terra::values(template) <- 1
+
+# écrire raster
+terra::writeRaster(template, output_rast_file, overwrite = TRUE)
+
+
+
+
+
+
+
+diagnose_snow_projection <- function(
+    input_stack_file,
+    AOI_file,
+    input_meta_file = NULL,
+    START_VIS = NULL,
+    END_VIS = NULL,
+    TARGET_CRS = "EPSG:2154",
+    TARGET_RES = 10,
+    SOURCE_CRS = NULL,
+    pad_x = 600,
+    pad_y = 200,
+    test_layer = NULL
+) {
+  
+  library(terra)
+  
+  cat("\n==============================\n")
+  cat("DIAGNOSTIC REPROJECTION NEIGE\n")
+  cat("==============================\n\n")
+  
+  #----------------------------
+  # Helpers
+  #----------------------------
+  snap_down <- function(v, res) floor(v / res) * res
+  snap_up   <- function(v, res) ceiling(v / res) * res
+  
+  print_rast_info <- function(r, name) {
+    cat("\n---", name, "---\n")
+    cat("class      :", class(r)[1], "\n")
+    cat("nlyr       :", terra::nlyr(r), "\n")
+    cat("crs        :", terra::crs(r), "\n")
+    cat("res        :", paste(terra::res(r), collapse = " / "), "\n")
+    cat("ext        :\n")
+    print(terra::ext(r))
+    cat("names head :\n")
+    print(utils::head(names(r), 5))
+  }
+  
+  print_vect_info <- function(v, name) {
+    cat("\n---", name, "---\n")
+    cat("class      :", class(v)[1], "\n")
+    cat("ngeom      :", length(v), "\n")
+    cat("crs        :", terra::crs(v), "\n")
+    cat("ext        :\n")
+    print(terra::ext(v))
+  }
+  
+  ext_overlap <- function(e1, e2) {
+    !(
+      terra::xmax(e1) <= terra::xmin(e2) ||
+        terra::xmin(e1) >= terra::xmax(e2) ||
+        terra::ymax(e1) <= terra::ymin(e2) ||
+        terra::ymin(e1) >= terra::ymax(e2)
+    )
+  }
+  
+  print_values <- function(r, name) {
+    cat("\n--- VALEURS :", name, "---\n")
+    cat("global range:\n")
+    print(terra::global(r, "range", na.rm = TRUE))
+    cat("global mean:\n")
+    print(terra::global(r, "mean", na.rm = TRUE))
+    cat("freq, si raster catégoriel:\n")
+    print(try(terra::freq(r, digits = 0), silent = TRUE))
+  }
+  
+  #----------------------------
+  # 1) Lecture stack
+  #----------------------------
+  stack_raw <- terra::rast(input_stack_file)
+  
+  if (is.na(terra::crs(stack_raw)) || terra::crs(stack_raw) == "") {
+    cat("\n!!! CRS du stack absent.\n")
+    if (is.null(SOURCE_CRS)) {
+      stop("SOURCE_CRS est NULL. Il faut le renseigner pour diagnostiquer correctement.")
+    } else {
+      cat("Assignation manuelle du CRS source :", SOURCE_CRS, "\n")
+      terra::crs(stack_raw) <- SOURCE_CRS
+    }
+  }
+  
+  print_rast_info(stack_raw, "STACK RAW")
+  
+  #----------------------------
+  # 2) Lecture AOI
+  #----------------------------
+  AOI_raw <- terra::vect(AOI_file)
+  
+  if (is.na(terra::crs(AOI_raw)) || terra::crs(AOI_raw) == "") {
+    stop("Le CRS de l'AOI est absent. Il faut corriger le .prj ou assigner le CRS.")
+  }
+  
+  print_vect_info(AOI_raw, "AOI RAW")
+  
+  #----------------------------
+  # 3) AOI en TARGET_CRS
+  #----------------------------
+  AOI_target <- terra::project(AOI_raw, TARGET_CRS)
+  print_vect_info(AOI_target, "AOI TARGET")
+  
+  #----------------------------
+  # 4) Template depuis AOI
+  #----------------------------
+  e_aoi <- terra::ext(AOI_target)
+  
+  e_raw <- terra::ext(
+    terra::xmin(e_aoi) - pad_x,
+    terra::xmax(e_aoi) + pad_x,
+    terra::ymin(e_aoi) - pad_y,
+    terra::ymax(e_aoi) + pad_y
+  )
+  
+  e_template <- terra::ext(
+    snap_down(terra::xmin(e_raw), TARGET_RES),
+    snap_up(terra::xmax(e_raw), TARGET_RES),
+    snap_down(terra::ymin(e_raw), TARGET_RES),
+    snap_up(terra::ymax(e_raw), TARGET_RES)
+  )
+  
+  template <- terra::rast(
+    e_template,
+    resolution = TARGET_RES,
+    crs = TARGET_CRS
+  )
+  
+  terra::values(template) <- NA
+  
+  print_rast_info(template, "TEMPLATE TARGET 10 m")
+  
+  #----------------------------
+  # 5) Choix couche test
+  #----------------------------
+  if (!is.null(input_meta_file) && file.exists(input_meta_file)) {
     
+    meta <- read.csv(input_meta_file)
+    meta$DATE <- as.Date(meta$DATE)
+    
+    if (!is.null(START_VIS) && !is.null(END_VIS)) {
+      START_VIS <- as.Date(START_VIS)
+      END_VIS <- as.Date(END_VIS)
+      meta_vis <- meta[meta$DATE >= START_VIS & meta$DATE <= END_VIS, ]
+      meta_vis <- meta_vis[order(meta_vis$DATE), ]
+    } else {
+      meta_vis <- meta
+    }
+    
+    cat("\n--- META ---\n")
+    cat("nrow meta     :", nrow(meta), "\n")
+    cat("nrow meta_vis :", nrow(meta_vis), "\n")
+    print(utils::head(meta_vis, 5))
+    
+    if (is.null(test_layer)) {
+      test_layer <- meta_vis$layer[1]
+    }
+  }
+  
+  if (is.null(test_layer)) {
+    test_layer <- names(stack_raw)[1]
+  }
+  
+  cat("\nCouche test choisie :", test_layer, "\n")
+  
+  if (!test_layer %in% names(stack_raw)) {
+    stop("La couche test n'existe pas dans le stack : ", test_layer)
+  }
+  
+  r_raw <- stack_raw[[test_layer]]
+  print_values(r_raw, paste0(test_layer, " RAW"))
+  
+  #----------------------------
+  # 6) Test overlap stack raw / AOI reprojetée dans CRS stack
+  #----------------------------
+  AOI_in_stack_crs <- terra::project(AOI_raw, terra::crs(stack_raw))
+  template_poly_target <- terra::as.polygons(terra::ext(template), crs = terra::crs(template))
+  template_poly_stack_crs <- terra::project(template_poly_target, terra::crs(stack_raw))
+  
+  cat("\n--- OVERLAP SOURCE CRS ---\n")
+  cat("Overlap stack_raw / AOI_in_stack_crs      :",
+      ext_overlap(terra::ext(stack_raw), terra::ext(AOI_in_stack_crs)), "\n")
+  cat("Overlap stack_raw / template_in_stack_crs :",
+      ext_overlap(terra::ext(stack_raw), terra::ext(template_poly_stack_crs)), "\n")
+  
+  cat("\nExtent AOI in stack CRS:\n")
+  print(terra::ext(AOI_in_stack_crs))
+  
+  cat("\nExtent template in stack CRS:\n")
+  print(terra::ext(template_poly_stack_crs))
+  
+  #----------------------------
+  # 7) Crop source avant projection
+  #----------------------------
+  cat("\n--- CROP AVANT PROJECTION ---\n")
+  
+  r_crop_src <- try(
+    terra::crop(r_raw, template_poly_stack_crs, snap = "out"),
+    silent = TRUE
+  )
+  
+  if (inherits(r_crop_src, "try-error")) {
+    cat("ERREUR crop source :\n")
+    print(r_crop_src)
+  } else {
+    print_rast_info(r_crop_src, "R CROP SOURCE")
+    print_values(r_crop_src, paste0(test_layer, " CROP SOURCE"))
+  }
+  
+  #----------------------------
+  # 8) Projection directe vers template
+  #----------------------------
+  cat("\n--- PROJECTION VERS TEMPLATE ---\n")
+  
+  r_proj_direct <- try(
+    terra::project(r_raw, template, method = "near"),
+    silent = TRUE
+  )
+  
+  if (inherits(r_proj_direct, "try-error")) {
+    cat("ERREUR project direct :\n")
+    print(r_proj_direct)
+  } else {
+    print_rast_info(r_proj_direct, "R PROJECT DIRECT TO TEMPLATE")
+    print_values(r_proj_direct, paste0(test_layer, " PROJECT DIRECT"))
+  }
+  
+  #----------------------------
+  # 9) Crop puis projection
+  #----------------------------
+  cat("\n--- CROP SOURCE PUIS PROJECTION ---\n")
+  
+  if (!inherits(r_crop_src, "try-error")) {
+    
+    r_proj_crop <- try(
+      terra::project(r_crop_src, template, method = "near"),
+      silent = TRUE
+    )
+    
+    if (inherits(r_proj_crop, "try-error")) {
+      cat("ERREUR project après crop :\n")
+      print(r_proj_crop)
+    } else {
+      print_rast_info(r_proj_crop, "R CROP + PROJECT TO TEMPLATE")
+      print_values(r_proj_crop, paste0(test_layer, " CROP + PROJECT"))
+    }
+  }
+  
+  #----------------------------
+  # 10) Masque AOI et fSCA
+  #----------------------------
+  cat("\n--- TEST AOI MASK ET FSCA ---\n")
+  
+  aoi_mask <- terra::rasterize(
+    AOI_target,
+    template,
+    field = 1,
+    touches = TRUE
+  )
+  
+  print_values(aoi_mask, "AOI MASK")
+  
+  if (!inherits(r_proj_direct, "try-error")) {
+    r_aoi <- terra::mask(r_proj_direct, aoi_mask)
+    print_values(r_aoi, paste0(test_layer, " PROJECT DIRECT + MASK AOI"))
+    
+    fsca <- as.numeric(terra::global(r_aoi, "mean", na.rm = TRUE)[1, 1]) * 100
+    cat("\nfSCA test direct + mask AOI =", fsca, "%\n")
+  }
+  
+  #----------------------------
+  # 11) Petit plot diagnostic
+  #----------------------------
+  cat("\n--- PLOT DIAGNOSTIC ---\n")
+  cat("Un plot devrait s'ouvrir avec raw, projeté, projeté+AOI.\n")
+  
+  oldpar <- par(no.readonly = TRUE)
+  on.exit(par(oldpar), add = TRUE)
+  
+  par(mfrow = c(1, 3), mar = c(3, 3, 3, 4))
+  
+  plot(r_raw, main = paste0("RAW\n", test_layer))
+  plot(AOI_in_stack_crs, add = TRUE, border = "red", lwd = 2)
+  
+  if (!inherits(r_proj_direct, "try-error")) {
+    plot(r_proj_direct, main = "PROJECT DIRECT\nvers template")
+    plot(AOI_target, add = TRUE, border = "red", lwd = 2)
+    
+    r_aoi <- terra::mask(r_proj_direct, aoi_mask)
+    plot(r_aoi, main = "PROJECT + MASK AOI")
+    plot(AOI_target, add = TRUE, border = "red", lwd = 2)
+  }
+  
+  cat("\n==============================\n")
+  cat("FIN DIAGNOSTIC\n")
+  cat("==============================\n")
+  
+  invisible(list(
+    stack_raw = stack_raw,
+    AOI_raw = AOI_raw,
+    AOI_target = AOI_target,
+    template = template,
+    test_layer = test_layer,
+    r_raw = r_raw,
+    r_proj_direct = if (!inherits(r_proj_direct, "try-error")) r_proj_direct else NULL,
+    aoi_mask = aoi_mask
+  ))
+}
+
+
+
+diag <- diagnose_snow_projection(
+  input_stack_file = input_stack_file,
+  AOI_file         = AOI_file,
+  input_meta_file  = input_meta_file,
+  START_VIS        = START_VIS,
+  END_VIS          = END_VIS,
+  TARGET_CRS       = "EPSG:2154",
+  TARGET_RES       = 10,
+  SOURCE_CRS       = NULL,
+  pad_x            = 600,
+  pad_y            = 200
+)    

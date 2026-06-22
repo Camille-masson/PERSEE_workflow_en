@@ -367,7 +367,7 @@ median_flock_to_tif <- function(root_dir, alpage, out_dir,
 nb_grazing_day <- function(daily_rds_file, out_dir,
                                   res_raster = 10,
                                   template = c("first_year","global"),
-                                  seuil = 5) {
+                                  seuil = 1) {
   if (!requireNamespace("raster", quietly = TRUE)) stop("Installe 'raster'.")
   if (!requireNamespace("sp", quietly = TRUE))      stop("Installe 'sp'.")
   if (!requireNamespace("dplyr", quietly = TRUE))   stop("Installe 'dplyr'.")
