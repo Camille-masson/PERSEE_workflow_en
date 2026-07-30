@@ -6,9 +6,9 @@ gc()
 source("config.R")
 
 # Definition of the analysis year and the alpine pastures to process
-YEAR = 2024
-alpage = "Viso"
-alpages = "Viso"
+YEAR = 2022
+alpage = "Cayolle"
+alpages = "cayolle"
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
@@ -292,11 +292,6 @@ if (TRUE) {
   }
 }
 
-
-
-
-
-
 #### 3. Night parc identification ####
 #------------------------------------#
 if (TRUE){
@@ -329,6 +324,7 @@ if (TRUE){
   library(lubridate)
   library(amt)
   library(dbscan)
+  library(terra)
   
   ## INPUT ----
   # Filter case (part2.2)
@@ -725,7 +721,7 @@ if (TRUE) {
   
   # Check the internet connection
   startTime = Sys.time()
-  results = par_HMM_fit(data, run_parameters, ncores = ncores, individual_info_file, sampling_period = 120, output_dir = hmm_pdf_case)
+  results = par_HMM_fit(data, run_parameters, ncores = ncores, individual_info_file,sampling_period = 120, output_dir = hmm_pdf_case)
   endTime = Sys.time()
   
   data_hmm <- do.call("rbind", lapply(results, function(result) result$data))
@@ -733,6 +729,48 @@ if (TRUE) {
   
 }
 
+
+
+
+
+d_hmm <- readRDS(output_rds_file)
+
+d_hmm %>%
+  filter(grepl("^F", ID)) %>%
+  summarise(
+    n_colliers_followit = n_distinct(ID),
+    n_positions = n(),
+    IDs = paste(sort(unique(ID)), collapse = ", ")
+  )
+
+
+
+
+
+
+
+
+
+
+
+
+verification_pas <- d_hmm %>%
+  arrange(ID, time) %>%
+  group_by(ID) %>%
+  mutate(
+    dt_sec = as.numeric(
+      difftime(time, lag(time), units = "secs")
+    )
+  ) %>%
+  filter(!is.na(dt_sec), dt_sec <= 1200) %>%
+  summarise(
+    pas_median_sec = median(dt_sec),
+    proportion_600s = mean(dt_sec == 600),
+    .groups = "drop"
+  )
+
+verification_pas %>%
+  filter(grepl("^F", ID))
 #### 5. FLOCK STOCKING RATE BY DAY BY STATE AND BY PARK ####
 #----------------------------------------------------------#
 if (TRUE){
