@@ -7,9 +7,9 @@ gc()
 source("config.R")
 
 ## Definition of the analysis year and the alpine pastures to process ##
-YEAR = 2024
-alpage = "Parau"
-alpages = c("Parau","Mourtes")
+YEAR = 2014
+alpage = "Combe-Madame"
+alpages = "Combe-Madame"
 TYPE <- "other" #Type of input data : catlog (at 2 minute) or other (catlog/other)
 
 ALPAGES_TOTAL <- list(
@@ -79,39 +79,56 @@ if (TRUE) {
   source(file.path(functions_dir, "Functions_filtering.R"))
   
   ## INPUT ##
-  # A folder containing the raw trajectories in CSV format from Catlog collars, organized into subfolders named after their alpine pastures
   raw_data_dir <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"))
   
-  # An .RDS file of the sampling periods starting from 0
-  sampling_period_file <- file.path(output_dir, "0. Sampling_Periods", paste0("Sampling_periods_", YEAR, "_", alpage, ".rds"))
+  sampling_period_file <- file.path(
+    output_dir,
+    "0. Sampling_Periods",
+    paste0("Sampling_periods_", YEAR, "_", alpage, ".rds")
+  )
+  
   sampling_periods <- readRDS(sampling_period_file)
   
   
   ## OUTPUT ##
-  # Creation of the output subfolder: GPS_simple_GPKG
   gps_output_dir <- file.path(output_dir, "1. GPS_simple_GPKG")
+  
   if (!dir.exists(gps_output_dir)) {
     dir.create(gps_output_dir, recursive = TRUE)
   }
-  # Creation of the output GPKG named: Donnees_brutes_9999_Alpage_demo_simplifiees.gpkg
-  output_file <- file.path(gps_output_dir, paste0("Donnees_brutes_", YEAR, "_", alpage, "_simplifiees.gpkg"))
+  
+  output_file <- file.path(
+    gps_output_dir,
+    paste0("Donnees_brutes_", YEAR, "_", alpage, "_simplifiees.gpkg")
+  )
   
   
   ## CODE ##
   
   lapply(alpages, function(alpage) {
+    
     collar_dir <- file.path(raw_data_dir, alpage)
     
     # Sélection du type de fichier
     file_pattern <- if (TYPE == "catlog") "\\.csv$" else "\\.Rdata$"
-    collar_files <- list.files(collar_dir, pattern = file_pattern, full.names = TRUE)
+    collar_files <- list.files(
+      collar_dir,
+      pattern = file_pattern,
+      full.names = TRUE
+    )
     
     if (length(collar_files) == 0) {
-      warning(paste("No files found in", collar_dir, "for TYPE =", TYPE))
+      warning(paste(
+        "No files found in",
+        collar_dir,
+        "for TYPE =",
+        TYPE
+      ))
       return(NULL)
     }
     
     lapply(collar_files, function(collar_f) {
+      
       # Extraction de l'ID du collier
       collar_ID <- if (TYPE == "catlog") {
         strsplit(basename(collar_f), split = "_")[[1]][1]
@@ -119,7 +136,12 @@ if (TRUE) {
         strsplit(basename(collar_f), split = "_")[[1]][1]
       }
       
-      print(paste("Processing file:", collar_f, "Collar ID:", collar_ID))
+      print(paste(
+        "Processing file:",
+        collar_f,
+        "Collar ID:",
+        collar_ID
+      ))
       
       # Charger les données GPS
       traject <- switch(
@@ -142,36 +164,63 @@ if (TRUE) {
       
       # Si aucun sampling_period trouvé, erreur
       if (length(sampling_period) == 0 || is.na(sampling_period)) {
-        stop(paste("ERREUR: Aucun sampling_period trouvé pour le collier", collar_ID))
+        stop(paste(
+          "ERREUR: Aucun sampling_period trouvé pour le collier",
+          collar_ID
+        ))
       }
       
-      # Ajustement vers un échantillonnage de 30 minutes
-      if (sampling_period != 30) {
-        print(paste("Collar", collar_ID, "has sampling_period =", sampling_period, "minutes. Resampling to 30 minutes."))
+      # Ajustement vers un échantillonnage d'une heure
+      if (sampling_period != 60) {
+        
+        print(paste(
+          "Collar",
+          collar_ID,
+          "has sampling_period =",
+          sampling_period,
+          "minutes. Resampling to 60 minutes."
+        ))
         
         # Calcul du facteur de réduction
-        reduction_factor <- round(30 / sampling_period)
+        reduction_factor <- max(1, round(60 / sampling_period))
         
         # Application du filtre
-        traject <- traject %>% slice(which(row_number() %% reduction_factor == 1))
+        traject <- traject %>%
+          slice(which(row_number() %% reduction_factor == 0))
       }
       
       # Transformation et formatage des données
       traject <- traject %>%
-        mutate(ID = collar_ID, date = lubridate::format_ISO8601(date)) %>%
-        vect(geom = c("lon", "lat"), crs = CRS_WSG84)
+        mutate(
+          ID = collar_ID,
+          date = lubridate::format_ISO8601(date)
+        ) %>%
+        vect(
+          geom = c("lon", "lat"),
+          crs = CRS_WSG84
+        )
       
       return(traject)
-    }) %>% do.call(rbind, .)  # Fusionner les données des colliers d'un même alpage
-  }) %>% do.call(rbind, .) -> merged_data  # Fusion finale pour tous les alpages
+      
+    }) %>%
+      do.call(rbind, .)
+    
+  }) %>%
+    do.call(rbind, .) -> merged_data
   
   # Vérifier si les données fusionnées sont vides
   if (is.null(merged_data) || nrow(merged_data) == 0) {
-    stop("No data available to export to GPKG. Check input files and processing steps.")
+    stop(
+      "No data available to export to GPKG. Check input files and processing steps."
+    )
   }
   
   # Exporter les données vers un fichier GPKG
-  writeVector(merged_data, filename = output_file, overwrite = TRUE)
+  writeVector(
+    merged_data,
+    filename = output_file,
+    overwrite = TRUE
+  )
 }
 
 #### 2.1 BJONERAAS FILTER CALIBRATION ####
@@ -536,88 +585,165 @@ if (TRUE) {
 
 }
 
-#### 2.Bis FILTERING OFB DATA####
-#-------------------------------#
-if (TRUE){
-  # Partie temporère se basant sur les données deja prélablement filtrés par l'OFB
-  # utilisant aussi le filtre de Bjorneraas. Mais dont les paramètres sont adaptés
-  # a un temp d'aquisition toutes les 30 minutes ! 
+#### 2.Bis FILTERING OFB DATA ####
+#--------------------------------#
+if (TRUE) {
   
+  # Temporary processing of OFB data previously filtered
+  # with the Bjorneraas filter.
   
-  if (TYPE == "other"){
-    ## ENTREES ##
-    # Un dossier contenant les trajectoires brutes, au format Rdata issu des colliers OFB,
-    # rangées dans des sous-dossiers au nom de leurs alpages
-    raw_data_dir = file.path(data_dir,paste0("Colliers_",YEAR,"_brutes"))
+  if (TYPE == "other") {
     
-    # Un data.frame contenant les dates de pose et de retrait des colliers
-    # Doit contenir les colonnes "alpage", "date_pose" et "date_retrait"
-    AIF <- file.path(raw_data_dir, paste0(YEAR,"_infos_alpages.csv"))
-    check_and_correct_csv(csv_path = AIF)
+    ## LIBRARY ##
+    library(sf)
     
-    ## SORTIES ##
-    # Dossier de sortie "Filtre_de_Bjorneraas: 
     
-    filter_output_dir <- file.path(output_dir, "2. Filtre_de_Bjorneraas")
+    ## INPUT ##
+    
+    # Folder containing raw OFB trajectories
+    raw_data_dir <- file.path(
+      data_dir,
+      paste0("Colliers_", YEAR, "_brutes")
+    )
+    
+    # Folder containing the Pastoral Unit shapefile
+    case_UP_file <- file.path(raster_dir, "UP")
+    
+    # Pastoral Unit shapefile
+    UP_file <- file.path(
+      case_UP_file,
+      paste0("UP_", alpage, ".shp")
+    )
+    
+    
+    ## OUTPUT ##
+    
+    filter_output_dir <- file.path(
+      output_dir,
+      "2. Filtre_de_Bjorneraas"
+    )
+    
     if (!dir.exists(filter_output_dir)) {
       dir.create(filter_output_dir, recursive = TRUE)
     }
     
-    # Un .RDS contenant les trajectoires filtrées (les nouvelles trajectoires sont ajoutées à la suite des trajectoires traitées précédemment). Coordonnées en Lambert93.
-    output_rds_file = file.path(filter_output_dir, paste0("Catlog_",YEAR,"_filtered_",alpages,".rds"))
-    
+    output_rds_file <- file.path(
+      filter_output_dir,
+      paste0("Catlog_", YEAR, "_filtered_", alpages, ".rds")
+    )
     
     
     ## CODE ##
-    files <- list.files(file.path(raw_data_dir, alpage), full.names = TRUE)
     
-    data <- do.call(rbind, lapply(files, function(file) { 
-      # Chargement des fichiers en fonction du TYPE
-      data <-load_other_data_rdata(file)
-      data$ID <- basename(file)# Ajouter l'ID du fichier pour tracer son origine
-      return(data)
+    files <- list.files(
+      file.path(raw_data_dir, alpage),
+      pattern = "\\.Rdata$",
+      full.names = TRUE
+    )
+    
+    data <- do.call(rbind, lapply(files, function(file) {
+      
+      traject <- load_other_data_rdata(file)
+      traject$ID <- basename(file)
+      
+      return(traject)
     }))
     
     
-    # Récupération des dates de pose et de retrait du collier
-    beg_date = as.POSIXct(get_alpage_info(alpage, AIF, "date_pose"), tz="GMT", format="%d/%m/%Y %H:%M")
-    end_date = as.POSIXct(get_alpage_info(alpage, AIF, "date_retrait"), tz="GMT", format="%d/%m/%Y %H:%M")
-    data = date_filter(data, beg_date, end_date) # Filtrage des données en fonction des dates de validité
+    # Remove missing coordinates
+    initial_count <- nrow(data)
     
-    #Supprime les NA
-    
-    initial_count <- nrow(data)  # Nombre de lignes tot
-    data <- data %>% filter(!is.na(lat) & !is.na(lon))
-    removed_count <- initial_count - nrow(data)  # Nombre de lignes supprimées
-    print(paste(removed_count, "points with NA were removed. Remaining points:", nrow(data)))
-    
-    # Supprime les lignes où infoloc == "pb_bjorneraas"
-    
-    initial_count <- nrow(data)  # Mise à jour du nombre total avant ce filtre
-    data <- data %>% filter(infoloc != "pb_bjorneraas")
-    removed_bjorneraas_count <- initial_count - nrow(data)  # Nombre de lignes supprimées (pb_bjorneraas)
-    print(paste(removed_bjorneraas_count, "points with location issues (pb_bjorneraas) were removed. Remaining points:", nrow(data)))
-    
-    
-    
-    
-    
-    # Transformation des colonnes avant enregistrement pour s'adapter a la sortie CATLOG
     data <- data %>%
-      rename(time = date) %>%  # Renomme 'date' en 'time'
+      filter(!is.na(lat) & !is.na(lon))
+    
+    print(paste(
+      initial_count - nrow(data),
+      "points with NA were removed. Remaining points:",
+      nrow(data)
+    ))
+    
+    
+    # Remove positions identified by the Bjorneraas filter
+    initial_count <- nrow(data)
+    
+    data <- data %>%
+      filter(infoloc != "pb_bjorneraas")
+    
+    print(paste(
+      initial_count - nrow(data),
+      "points with location issues were removed. Remaining points:",
+      nrow(data)
+    ))
+    
+    
+    # Load the Pastoral Unit
+    UP <- st_read(UP_file, quiet = TRUE)
+    
+    if (is.na(st_crs(UP))) {
+      stop("The Pastoral Unit shapefile has no CRS.")
+    }
+    
+    
+    # Identify positions located inside the Pastoral Unit
+    points_sf <- st_as_sf(
+      data,
+      coords = c("lon", "lat"),
+      crs = 4326,
+      remove = FALSE
+    ) %>%
+      st_transform(st_crs(UP))
+    
+    data$inside_UP <- lengths(
+      st_intersects(points_sf, UP)
+    ) > 0
+    
+    
+    # Identify the first and last position inside the Pastoral Unit
+    grazing_periods <- data %>%
+      arrange(ID, date) %>%
+      filter(inside_UP) %>%
+      group_by(ID) %>%
+      summarise(
+        arrival_date = first(date),
+        departure_date = last(date),
+        .groups = "drop"
+      )
+    
+    
+    # Print detected arrival and departure dates
+    cat("\nDetected grazing period for each collar:\n")
+    print(grazing_periods, n = Inf)
+    
+    
+    # Keep all positions between arrival and departure,
+    # including temporary exits from the Pastoral Unit
+    data <- data %>%
+      inner_join(grazing_periods, by = "ID") %>%
+      filter(
+        date >= arrival_date,
+        date <= departure_date
+      ) %>%
+      dplyr::select(
+        -inside_UP,
+        -arrival_date,
+        -departure_date
+      )
+    
+    
+    # Format data to match the CATLOG output
+    data <- data %>%
+      rename(time = date) %>%
       mutate(
-        ID = sub("_.*", "", ID),  # Garde uniquement la partie avant "_" dans ID
-        alpage = alpage,          # Ajoute une colonne 'alpage' remplie avec la valeur de l'objet alpage
-        species = "brebis",        # Ajoute une colonne 'species' remplie avec "brebis"
+        ID = sub("_.*", "", ID),
+        alpage = alpage,
+        species = "brebis",
         race = "Merinos"
       ) %>%
-      dplyr::select(-infoloc)  # Supprime la colonne 'infoloc'
+      dplyr::select(-infoloc)
     
     
-    # Enregistrement des données filtrées au format .RDS
+    # Save filtered trajectories
     saveRDS(data, output_rds_file)
-    
-    
   }
 }
 
