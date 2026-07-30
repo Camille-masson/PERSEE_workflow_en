@@ -350,6 +350,8 @@ if (TRUE){
   
   ref_file <- file.path(nightpark_output_dir, paste0("NightPark_ref_", alpage, ".rds"))
   
+  night_pen_use_file <- file.path(nightpark_output_dir, paste0("Use_night_pens_", YEAR, "_", alpage, ".rds"))
+  
   # rast of the template 
   template_case = file.path(raster_dir, "template")
   if(!dir.exists(template_case)) {dir.create(template_case, recursive = TRUE)}
@@ -428,7 +430,7 @@ if (TRUE){
     trk <- make_track(sub, x, y, time, crs = 2154, all_cols = TRUE)
     
     hr  <- hr_kde(trk, trast = template)          # lissage stable
-    iso <- hr_isopleths(hr, levels = 0.9)                    # contour "parc"
+    iso <- hr_isopleths(hr, levels = 0.8)                    # contour "parc"
     
     iso$cluster <- k
     iso_list[[as.character(k)]] <- iso
@@ -612,22 +614,46 @@ if (TRUE){
   saveRDS(d_end, output_rds_file)
   
   
+  # ---- Night-pen use dataset ----
   
+  # Dates with an assigned night pen
+  used_nights <- day_park %>%
+    dplyr::filter(!is.na(park), park != "transition_day") %>%
+    dplyr::transmute(date = day,  park, used = 1L)
   
-  d_end$doy <- yday(d_end$time)
+  # Status of each day
+  day_status <- day_park %>%
+    dplyr::transmute(date = day, transition_day = !is.na(park) & park == "transition_day")
   
-  df <- d_end %>%
-    dplyr::count(doy, park, name = "n") %>%
-    dplyr::group_by(doy) %>%
-    dplyr::slice_max(n, n = 1, with_ties = FALSE) %>%
+  # Complete dataset: one row per park and per day
+  night_pen_use <- tidyr::expand_grid(
+    park = unique(used_nights$park),
+    date = seq(min(day_park$day, na.rm = TRUE), max(day_park$day, na.rm = TRUE),by = "day")) %>%
+    dplyr::left_join(used_nights, by = c("park", "date")) %>%
+    dplyr::left_join(day_status, by = "date") %>%
+    dplyr::mutate(year = YEAR, alpage = alpage, doy = lubridate::yday(date),
+      used = tidyr::replace_na(used, 0L), transition_day = tidyr::replace_na(transition_day, FALSE)) %>%
+    dplyr::group_by(park) %>%
+    dplyr::mutate(n_nights = sum(used)) %>%
     dplyr::ungroup() %>%
-    dplyr::select(doy, park)
+    dplyr::select(year, alpage, park, date, doy, used, transition_day, n_nights) %>%
+    dplyr::arrange(as.integer(sub("park_", "", park)), date)
   
-  ggplot(df, aes(x = doy, y = park, colour = park)) +
-    geom_point(size = 2, alpha = 0.9) +
-    labs(x = "DOY", y = NULL, colour = "Nigth_Park") +
-    theme_minimal(base_size = 12) +
-    theme(panel.grid.minor = element_blank())
+  # Print the number and dates of nights used by each park
+  night_pen_summary <- night_pen_use %>%
+    dplyr::filter(used == 1) %>%
+    dplyr::group_by(year, alpage, park) %>%
+    dplyr::summarise(
+      n_nights = dplyr::first(n_nights),
+      dates = paste(date, collapse = ", "),
+      .groups = "drop"
+    )
+  
+  cat("\nNight-pen use by park:\n")
+  print(night_pen_summary, n = Inf)
+  
+  # Save daily night-pen use
+  saveRDS(night_pen_use, night_pen_use_file)
   
 }
 
@@ -731,46 +757,6 @@ if (TRUE) {
 
 
 
-
-
-d_hmm <- readRDS(output_rds_file)
-
-d_hmm %>%
-  filter(grepl("^F", ID)) %>%
-  summarise(
-    n_colliers_followit = n_distinct(ID),
-    n_positions = n(),
-    IDs = paste(sort(unique(ID)), collapse = ", ")
-  )
-
-
-
-
-
-
-
-
-
-
-
-
-verification_pas <- d_hmm %>%
-  arrange(ID, time) %>%
-  group_by(ID) %>%
-  mutate(
-    dt_sec = as.numeric(
-      difftime(time, lag(time), units = "secs")
-    )
-  ) %>%
-  filter(!is.na(dt_sec), dt_sec <= 1200) %>%
-  summarise(
-    pas_median_sec = median(dt_sec),
-    proportion_600s = mean(dt_sec == 600),
-    .groups = "drop"
-  )
-
-verification_pas %>%
-  filter(grepl("^F", ID))
 #### 5. FLOCK STOCKING RATE BY DAY BY STATE AND BY PARK ####
 #----------------------------------------------------------#
 if (TRUE){
