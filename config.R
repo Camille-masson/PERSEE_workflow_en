@@ -66,4 +66,4 @@ sapply(function_files, source)
 
 # Paramètres globaux
 
-ncores <- parallel::detectCores() /3 # Utilisation optimale des cœurs CPU
+ncores <- parallel::detectCores() -20 # Utilisation optimale des cœurs CPU

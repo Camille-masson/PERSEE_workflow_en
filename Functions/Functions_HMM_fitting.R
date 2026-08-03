@@ -505,33 +505,71 @@ par_HMM_fit <- function(data, run_parameters_list, ncores,
   })
   
   results <- parLapply(clus, unique(data$ID), function(ID) {
-    # log temporaire
-    log_file <- file.path(tempdir(), paste0("log_", ID, ".txt"))  # <-- tempdir()
-    sink(log_file, append = TRUE, split = TRUE)
     
-    cat(paste0("[INFO] Traitement de l'individu ID: ", ID, "\n")); flush.console()
+    log_file <- file.path(tempdir(), paste0("log_", ID, ".txt"))
+    sink(log_file, append = FALSE, split = TRUE)
+    
+    cat("[INFO] Processing ID:", ID, "\n")
+    
     alpage <- get_individual_alpage(ID, individual_info_file)
-    cat(paste0("[INFO] Alpage associé: ", alpage, "\n"))
-    
-    sampling_period <- sampling_table$sampling_period[sampling_table$ID == ID, drop = TRUE]
-    run_parameters  <- run_parameters_list[[ID]]
+    sampling_period <- sampling_table$sampling_period[
+      sampling_table$ID == ID
+    ]
+    run_parameters <- run_parameters_list[[ID]]
     
     res <- tryCatch(
-      hmm_fit(data[data$ID == ID, ],
-              runPar = run_parameters,
-              pdf_dir = pdf_dir,                # <-- on passe pdf_dir tel quel
-              sampling_period = sampling_period),
+      hmm_fit(
+        data[data$ID == ID, ],
+        runPar = run_parameters,
+        pdf_dir = pdf_dir,
+        sampling_period = sampling_period
+      ),
       error = function(e) {
-        cat(paste0("[ERREUR] Problème détecté pour ID: ", ID, " - Message: ", e$message, "\n"))
-        flush.console()
+        cat(
+          "[ERROR] Problem for ID:",
+          ID,
+          "-",
+          e$message,
+          "\n"
+        )
         NULL
       }
     )
     
-    cat(paste0("[INFO] Fin du traitement pour ID: ", ID, "\n")); flush.console()
-    sink()  # stop redirection
-    return(list(result = res, log_file = log_file))  # <-- on retourne le chemin du log
+    cat("[INFO] End of processing for ID:", ID, "\n")
+    
+    sink()
+    
+    log_text <- if (file.exists(log_file)) {
+      readLines(log_file, warn = FALSE)
+    } else {
+      character(0)
+    }
+    
+    unlink(log_file, force = TRUE)
+    
+    list(
+      result = res,
+      log_text = log_text
+    )
   })
+  
+  stopCluster(clus)
+  
+  for (i in seq_along(results)) {
+    if (length(results[[i]]$log_text) > 0) {
+      cat(
+        "\n---- Logs for ",
+        unique(data$ID)[i],
+        " ----\n",
+        sep = ""
+      )
+      cat(results[[i]]$log_text, sep = "\n")
+      cat("\n")
+    }
+  }
+  
+  return(lapply(results, `[[`, "result"))
   
   stopCluster(clus)
   endTime <- Sys.time()

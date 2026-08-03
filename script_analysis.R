@@ -7,9 +7,9 @@ gc()
 source("config.R")
 
 ## Definition of the analysis year and the alpine pastures to process ##
-YEAR = 2014
-alpage = "Combe-Madame"
-alpages = "Combe-Madame"
+YEAR = 2025
+alpage = "Mourtes"
+alpages = "Mourtes"
 TYPE <- "other" #Type of input data : catlog (at 2 minute) or other (catlog/other)
 
 ALPAGES_TOTAL <- list(
@@ -29,7 +29,6 @@ ALPAGES_TOTAL <- list(
   "2025" = c("Viso", "Cayolle", "Sanguiniere", "Ponsonniere", "Mourtes", "Parau")
 )
 ALPAGES <- ALPAGES_TOTAL[[as.character(YEAR)]]
-
 
 
 
@@ -747,6 +746,7 @@ if (TRUE) {
   }
 }
 
+
 #### 3. Night parc identification ####
 #------------------------------------#
 if (TRUE){
@@ -779,6 +779,7 @@ if (TRUE){
   library(lubridate)
   library(amt)
   library(dbscan)
+  library(terra)
   
   ## INPUT ----
   # Filter case (part2.2)
@@ -804,6 +805,8 @@ if (TRUE){
   
   ref_file <- file.path(nightpark_output_dir, paste0("NightPark_ref_", alpage, ".rds"))
   
+  night_pen_use_file <- file.path(nightpark_output_dir, paste0("Use_night_pens_", YEAR, "_", alpage, ".rds"))
+  
   # rast of the template 
   template_case = file.path(raster_dir, "template")
   if(!dir.exists(template_case)) {dir.create(template_case, recursive = TRUE)}
@@ -824,30 +827,50 @@ if (TRUE){
   
   # 2) Clustering global (amas = parcs)
   eps_m  <- 100  # ajuste 30-80
-  minPts <- 80   # ajuste 10-80
+  minPts <- 80  # ajuste 10-80
   
   cl <- dbscan(st_coordinates(d_night_vect), eps = eps_m, minPts = minPts)
   d_night_vect$cluster <- cl$cluster
   d_night$cluster <- d_night_vect$cluster
   
-  # creation of a template base on the UP (Pastoral unity)
+  # 3) template creation
   res_m <- 10
   buffer_m <- 100
+  
   up <- terra::vect(UP_file)
   up <- terra::project(up, "EPSG:2154")
-  e <- terra::ext(up)
-  e <- terra::ext(e$xmin-buffer_m, e$xmax+buffer_m,
-                  e$ymin-buffer_m, e$ymax+buffer_m)
+  
+  pts <- terra::vect(d_night_vect)
+  pts <- terra::project(pts, "EPSG:2154")
+  
+  e_up  <- terra::ext(up)
+  e_pts <- terra::ext(pts)
+  
+  e <- terra::ext(
+    min(e_up$xmin, e_pts$xmin) - buffer_m,
+    max(e_up$xmax, e_pts$xmax) + buffer_m,
+    min(e_up$ymin, e_pts$ymin) - buffer_m,
+    max(e_up$ymax, e_pts$ymax) + buffer_m
+  )
+  
   snap_down <- function(v, res) floor(v / res) * res
   snap_up   <- function(v, res) ceiling(v / res) * res
   
   e <- terra::ext(
-    snap_down(e$xmin, res_m), snap_up(e$xmax, res_m),
-    snap_down(e$ymin, res_m), snap_up(e$ymax, res_m)
+    snap_down(e$xmin, res_m),
+    snap_up(e$xmax, res_m),
+    snap_down(e$ymin, res_m),
+    snap_up(e$ymax, res_m)
   )
+  
   template <- terra::rast(e, res = res_m, crs = "EPSG:2154")
-  terra::values(template) <- 0
+  terra::values(template) <- 1
+  
   terra::writeRaster(template, output_rast_file, overwrite = TRUE)
+  
+  
+  
+  
   
   # KDE + 95% par cluster
   k_list <- sort(unique(d_night$cluster))
@@ -859,10 +882,34 @@ if (TRUE){
     
     sub <- d_night[d_night$cluster == k, ]
     
-    trk <- make_track(sub, x, y, time, crs = 2154, all_cols = TRUE)
+    trk <- make_track(
+      sub,
+      x,
+      y,
+      time,
+      crs = 2154,
+      all_cols = TRUE
+    )
     
-    hr  <- hr_kde(trk, trast = template)          # lissage stable
-    iso <- hr_isopleths(hr, levels = 0.95)                    # contour "parc"
+    hr <- try(
+      hr_kde(trk, trast = template),
+      silent = TRUE
+    )
+    
+    if (inherits(hr, "try-error")) {
+      cat("Cluster", k, "skipped: KDE failed.\n")
+      next
+    }
+    
+    iso <- try(
+      hr_isopleths(hr, levels = 0.8),
+      silent = TRUE
+    )
+    
+    if (inherits(iso, "try-error")) {
+      cat("Cluster", k, "skipped: isopleth failed.\n")
+      next
+    }
     
     iso$cluster <- k
     iso_list[[as.character(k)]] <- iso
@@ -1046,22 +1093,46 @@ if (TRUE){
   saveRDS(d_end, output_rds_file)
   
   
+  # ---- Night-pen use dataset ----
   
+  # Dates with an assigned night pen
+  used_nights <- day_park %>%
+    dplyr::filter(!is.na(park), park != "transition_day") %>%
+    dplyr::transmute(date = day,  park, used = 1L)
   
-  d_end$doy <- yday(d_end$time)
+  # Status of each day
+  day_status <- day_park %>%
+    dplyr::transmute(date = day, transition_day = !is.na(park) & park == "transition_day")
   
-  df <- d_end %>%
-    dplyr::count(doy, park, name = "n") %>%
-    dplyr::group_by(doy) %>%
-    dplyr::slice_max(n, n = 1, with_ties = FALSE) %>%
+  # Complete dataset: one row per park and per day
+  night_pen_use <- tidyr::expand_grid(
+    park = unique(used_nights$park),
+    date = seq(min(day_park$day, na.rm = TRUE), max(day_park$day, na.rm = TRUE),by = "day")) %>%
+    dplyr::left_join(used_nights, by = c("park", "date")) %>%
+    dplyr::left_join(day_status, by = "date") %>%
+    dplyr::mutate(year = YEAR, alpage = alpage, doy = lubridate::yday(date),
+                  used = tidyr::replace_na(used, 0L), transition_day = tidyr::replace_na(transition_day, FALSE)) %>%
+    dplyr::group_by(park) %>%
+    dplyr::mutate(n_nights = sum(used)) %>%
     dplyr::ungroup() %>%
-    dplyr::select(doy, park)
+    dplyr::select(year, alpage, park, date, doy, used, transition_day, n_nights) %>%
+    dplyr::arrange(as.integer(sub("park_", "", park)), date)
   
-  ggplot(df, aes(x = doy, y = park, colour = park)) +
-    geom_point(size = 2, alpha = 0.9) +
-    labs(x = "DOY", y = NULL, colour = "Nigth_Park") +
-    theme_minimal(base_size = 12) +
-    theme(panel.grid.minor = element_blank())
+  # Print the number and dates of nights used by each park
+  night_pen_summary <- night_pen_use %>%
+    dplyr::filter(used == 1) %>%
+    dplyr::group_by(year, alpage, park) %>%
+    dplyr::summarise(
+      n_nights = dplyr::first(n_nights),
+      dates = paste(date, collapse = ", "),
+      .groups = "drop"
+    )
+  
+  cat("\nNight-pen use by park:\n")
+  print(night_pen_summary, n = Inf)
+  
+  # Save daily night-pen use
+  saveRDS(night_pen_use, night_pen_use_file)
   
 }
 
@@ -1112,7 +1183,7 @@ if (TRUE) {
   
   ## OUTPUTS ##
   # Creation of the subfolder to store the results of the Bjorneraas filter
-  filter_output_dir <- file.path(output_dir, "3. HMM_comportement")
+  filter_output_dir <- file.path(output_dir, "4. HMM_comportement")
   if (!dir.exists(filter_output_dir)) {
     dir.create(filter_output_dir, recursive = TRUE)
   }
@@ -1230,9 +1301,9 @@ if (TRUE){
   
   # An .RDS file containing the trajectories categorized by behavior
   input_rds_file <- file.path(output_dir, "4. HMM_comportement",  paste0("Catlog_", YEAR, "_", alpage, "_viterbi.rds"))
-data <- readRDS(input_rds_file)
-str(data)
-data %>%
+  data <- readRDS(input_rds_file)
+  str(data)
+  data %>%
   dplyr::group_by(ID) %>%
   dplyr::summarise(
     n = dplyr::n(),
@@ -1243,10 +1314,6 @@ data %>%
   dplyr::arrange(dplyr::desc(na_time + na_x + na_y)) %>%
   print(n = 30)
 
-  # A .csv file "infos_alpages" filled in according to the demo dataset template
-  AIF <- file.path(raw_data_dir, paste0(YEAR,"_infos_alpages.csv"))
-  check_and_correct_csv(csv_path = AIF)
-  
   # A data.frame containing herd sizes and their changes over time based on the date
   raw_data_dir <- file.path(data_dir, paste0("Colliers_", YEAR, "_brutes"))
   flock_size_file <- file.path(raw_data_dir, paste0(YEAR, "_tailles_troupeaux.csv"))
@@ -1258,10 +1325,11 @@ data %>%
   # Un .SHP avec les Unités pastorales UP
   UP_file = file.path(case_UP_file, paste0("UP_",alpage,".shp"))
   
+  
   ## OUTPUTS ##
   # Output folder
   
-  save_dir <- file.path(output_dir, "5. Chargements_calcules")
+  save_dir <- file.path(output_dir, "5. Stocking_rate")
   
   # One .RDS per alpine pasture containing the daily loads by behavior
   state_daily_rds_prefix <- paste0("by_day_and_state_", YEAR, "_")
@@ -1305,7 +1373,10 @@ data %>%
 
   for (alpage in alpages) {
     flock_sizes <- get_flock_size_through_time(alpage, flock_size_file)
-    prop_time_collar_on <- get_alpage_info(alpage, AIF, "proportion_jour_allume")
+    sampling_info <- readRDS(file.path(output_dir, "0. Sampling_Periods", paste0("Sampling_periods_", YEAR, "_", alpage, ".rds")))
+    
+    prop_time_collar_on <- weighted.mean(sampling_info$proportion_jour_allume, sampling_info$n_days,na.rm = TRUE  )
+    print(paste("Mean proportion of collar activity for", alpage, "=",round(prop_time_collar_on, 3)))
     
     # Loading the filtered data for the alpine pasture
       data <- readRDS(input_rds_file)
@@ -1396,7 +1467,7 @@ if (TRUE) {
   for(alpage in alpages){
     # ENTREE
     #Dossier contenant les sous dossier des chargement
-    case_flock_file = file.path(output_dir, "5. Chargements_Calcules")
+    case_flock_file = file.path(output_dir, "5. Stocking_rate")
     #Dossier contenant les fichiers du tot de chargement
     case_flock_alpage_file = file.path(case_flock_file,paste0(YEAR,"_",alpage))
     
@@ -1422,7 +1493,7 @@ if (TRUE) {
     # SORTIE 
     
     #Création du dossier de sortie des indicateur pour la visualistaion
-    output_visu_case <- file.path(output_dir, "5. Indicateurs_visualisation")
+    output_visu_case <- file.path(output_dir, "6. Indicateurs_visualisation")
     if (!dir.exists(output_visu_case)) {
       dir.create(output_visu_case, recursive = TRUE)
     }
@@ -1452,6 +1523,9 @@ if (TRUE) {
     output_flock_tot_tif_crop = file.path(output_case_alpage, paste0("total_",YEAR,"_",alpage,"_crop.tif"))
     
     
+    
+    d<-readRDS(total_rds_prefix)
+    summary(d)
     # CODE
     
     #Indicateur : Charge total .TIF

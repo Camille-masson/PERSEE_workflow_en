@@ -411,8 +411,18 @@ flock_load_by_day_and_state_to_rds_kernelbb_grid <- function(data, grid, save_di
   
   if (!dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
   
-  Tmax <- 42
-  Ds <- list(Repos = 1.25, Paturage = 3, Deplacement = 4.5)
+  # Maximum allowed gap for hourly GPS data
+  Tmax <- 90
+  
+  # Diffusion coefficients for French and English state names
+  Ds <- list(
+    Repos = 1.25,
+    Paturage = 3,
+    Deplacement = 4.5,
+    Rest = 1.25,
+    Grazing = 3,
+    Movement = 4.5
+  )
   
   for (state in unique(data$state)) {
     cat("Traitement de l'état :", as.character(state), "\n")
@@ -514,8 +524,18 @@ flock_load_by_day_and_state_to_rds_kernelbb_Auto_grid <- function(data, save_dir
     dir.create(save_dir, recursive = TRUE)
   }
   
-  Tmax <- 42  # Max gap en minutes
-  Ds <- list(Repos = 1.25, Paturage = 3, Deplacement = 4.5)
+  # Maximum allowed gap for hourly GPS data
+  Tmax <- 90
+  
+  # Diffusion coefficients for French and English state names
+  Ds <- list(
+    Repos = 1.25,
+    Paturage = 3,
+    Deplacement = 4.5,
+    Rest = 1.25,
+    Grazing = 3,
+    Movement = 4.5
+  )
   
   all_files <- c()  # Liste des fichiers RDS générés
   
