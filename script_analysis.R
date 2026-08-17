@@ -7,8 +7,8 @@ source("config.R")
 
 # Definition of the analysis year and the alpine pastures to process
 YEAR = 2022
-alpage = "Cayolle"
-alpages = "cayolle"
+alpage = "Grande-Fesse"
+alpages = "Grande-Fesse"
 
 ALPAGES_TOTAL <- list(
   "9999" = c("Alpage_demo"),
