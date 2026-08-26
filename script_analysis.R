@@ -8,8 +8,8 @@ source("config.R")
 
 ## Definition of the analysis year and the alpine pastures to process ##
 YEAR = 2025
-alpage = "Mourtes"
-alpages = "Mourtes"
+alpage = "Combe"
+alpages = "Combe"
 TYPE <- "other" #Type of input data : catlog (at 2 minute) or other (catlog/other)
 
 ALPAGES_TOTAL <- list(
@@ -746,7 +746,6 @@ if (TRUE) {
   }
 }
 
-
 #### 3. Night parc identification ####
 #------------------------------------#
 if (TRUE){
@@ -827,7 +826,7 @@ if (TRUE){
   
   # 2) Clustering global (amas = parcs)
   eps_m  <- 100  # ajuste 30-80
-  minPts <- 80  # ajuste 10-80
+  minPts <- 10  # ajuste 10-80
   
   cl <- dbscan(st_coordinates(d_night_vect), eps = eps_m, minPts = minPts)
   d_night_vect$cluster <- cl$cluster
@@ -902,7 +901,7 @@ if (TRUE){
     }
     
     iso <- try(
-      hr_isopleths(hr, levels = 0.8),
+      hr_isopleths(hr, levels = 0.95), #0.8
       silent = TRUE
     )
     
@@ -1351,7 +1350,7 @@ if (TRUE){
   ## CODE ##
   # creation of a template base on the UP (Pastoral unity)
   res_m <- 10
-  buffer_m <- 100
+  buffer_m <- 750
   up <- terra::vect(UP_file)
   up <- terra::project(up, "EPSG:2154")
   e <- terra::ext(up)
